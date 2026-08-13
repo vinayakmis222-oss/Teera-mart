@@ -1,0 +1,154 @@
+{
+  "theme": "light",
+  "archetype": "Organic & Earthy",
+  "typography": {
+    "fonts": {
+      "heading": "Cabinet Grotesk",
+      "body": "Manrope"
+    },
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl tracking-tighter font-medium text-charcoal",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl tracking-tight font-medium text-charcoal",
+      "h3": "text-xl sm:text-2xl tracking-tight font-medium text-charcoal",
+      "h4": "text-lg sm:text-xl font-medium text-charcoal",
+      "body": "text-base text-charcoal/80 leading-relaxed",
+      "small": "text-sm text-charcoal/70",
+      "overline": "text-xs uppercase tracking-[0.2em] text-terracotta font-semibold"
+    }
+  },
+  "colors": {
+    "primary": {
+      "DEFAULT": "#C4633A",
+      "foreground": "#F7F3EF",
+      "hover": "#A6512B"
+    },
+    "background": {
+      "DEFAULT": "#F7F3EF",
+      "alt": "#EFEAE4"
+    },
+    "text": {
+      "DEFAULT": "#2B2B2B",
+      "muted": "#5C5C5C"
+    },
+    "border": {
+      "DEFAULT": "#E5DFD7",
+      "focus": "#C4633A"
+    },
+    "accent": {
+      "sage": "#7E9476",
+      "ochre": "#D4A373"
+    },
+    "status": {
+      "success": "#7E9476",
+      "warning": "#D4A373",
+      "error": "#B0413E"
+    }
+  },
+  "visual_enhancers": {
+    "shadows": {
+      "card": "shadow-[0_4px_20px_rgba(43,43,43,0.05)]",
+      "hover": "shadow-[0_8px_30px_rgba(196,99,58,0.12)]",
+      "dropdown": "shadow-[0_10px_40px_rgba(43,43,43,0.08)]"
+    },
+    "borders": {
+      "radius": {
+        "card": "rounded-none md:rounded-sm",
+        "button": "rounded-none",
+        "input": "rounded-none"
+      },
+      "style": "border border-border/80"
+    },
+    "surfaces": {
+      "header": "bg-off-white/80 backdrop-blur-xl border-b border-border z-50 sticky top-0",
+      "sidebar": "bg-off-white border-r border-border",
+      "card": "bg-white border border-border hover:-translate-y-1 transition-transform duration-300"
+    }
+  },
+  "components": {
+    "button": {
+      "primary": "bg-terracotta text-off-white hover:bg-[#A6512B] transition-colors duration-200 font-medium px-6 py-3",
+      "secondary": "bg-transparent border-2 border-charcoal text-charcoal hover:bg-charcoal hover:text-off-white transition-all duration-200 px-6 py-3",
+      "ghost": "text-charcoal/80 hover:text-terracotta hover:bg-terracotta/5 transition-colors px-4 py-2"
+    },
+    "card": {
+      "product": "bg-white border border-border p-4 flex flex-col gap-4 group cursor-pointer hover:shadow-[0_8px_30px_rgba(196,99,58,0.12)] transition-all duration-300",
+      "category": "aspect-square relative overflow-hidden bg-white border border-border group"
+    },
+    "inputs": {
+      "search": "bg-white border-2 border-border focus:border-terracotta text-charcoal w-full px-4 py-3 outline-none transition-colors",
+      "checkbox": "w-5 h-5 border-2 border-border text-terracotta focus:ring-terracotta focus:ring-offset-off-white"
+    },
+    "badges": {
+      "seller": "bg-off-white border border-border text-xs px-2 py-1 text-charcoal/70 flex items-center gap-1",
+      "rating": "bg-sage text-white text-xs font-bold px-2 py-1 flex items-center gap-1"
+    }
+  },
+  "layouts": {
+    "grid": {
+      "products": "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 md:gap-6",
+      "categories": "grid grid-cols-3 md:grid-cols-6 lg:grid-cols-8 gap-4"
+    },
+    "spacing": {
+      "section": "py-12 md:py-20",
+      "container": "container mx-auto px-4 md:px-8"
+    }
+  },
+  "motion": {
+    "hover": "transition-all duration-300 ease-in-out",
+    "entrance": "animate-in fade-in slide-in-from-bottom-4 duration-500"
+  },
+  "accessibility": {
+    "contrast": "Ensure text-charcoal passes WCAG AAA against off-white background. Terracotta must maintain 3:1 ratio for UI components.",
+    "focus": "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta focus-visible:ring-offset-2 focus-visible:ring-offset-off-white",
+    "testing_attributes": "All interactive elements must include data-testid attributes (e.g., data-testid='add-to-cart-btn')"
+  },
+  "media": {
+    "images": [
+      {
+        "category": "banners",
+        "url": "https://images.unsplash.com/photo-1724582586529-62622e50c0b3?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NzZ8MHwxfHNlYXJjaHwyfHxtb2Rlcm4lMjBsaXZpbmclMjByb29tJTIwaW50ZXJpb3J8ZW58MHx8fHwxNzg2NjQ1NTIwfDA&ixlib=rb-4.1.0&q=85",
+        "description": "Modern living room for hero banner showcasing decor and construction materials"
+      },
+      {
+        "category": "products_tiles",
+        "url": "https://images.unsplash.com/photo-1706629503571-c165023a7792?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1MTN8MHwxfHNlYXJjaHwzfHxjZXJhbWljJTIwZmxvb3IlMjB0aWxlc3xlbnwwfHx8fDE3ODY2NDU1MjB8MA&ixlib=rb-4.1.0&q=85",
+        "description": "White marble floor tile sample"
+      },
+      {
+        "category": "products_paint",
+        "url": "https://images.unsplash.com/photo-1525909002-1b05e0c869d8?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMjd8MHwxfHNlYXJjaHwxfHx3YWxsJTIwcGFpbnQlMjBjb2xvcnN8ZW58MHx8fHwxNzg2NjQ1NTIwfDA&ixlib=rb-4.1.0&q=85",
+        "description": "Paint rollers representing paint category"
+      },
+      {
+        "category": "products_decor",
+        "url": "https://images.unsplash.com/photo-1580064141068-f42c18d153f5?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxNzV8MHwxfHNlYXJjaHw0fHxob21lJTIwZGVjb3IlMjB2YXNlfGVufDB8fHx8MTc4NjY0NTUyMXww&ixlib=rb-4.1.0&q=85",
+        "description": "Brown and beige ceramic vase for home decor"
+      },
+      {
+        "category": "products_flooring",
+        "url": "https://images.unsplash.com/photo-1724026502211-ff953e813194?crop=entropy&cs=srgb&fm=jpg&ixid=M3w7NDk1Nzl8MHwxfHNlYXJjaHwyfHx3b29kJTIwZmxvb3JpbmclMjByb29tfGVufDB8fHx8MTc4NjY0NTUyMHww&ixlib=rb-4.1.0&q=85",
+        "description": "Wood flooring sample"
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Use Tailwind configuration to define custom colors: terracotta (#C4633A), charcoal (#2B2B2B), off-white (#F7F3EF).",
+    "Install and use 'lucide-react' for icons as it fits the clean marketplace look.",
+    "Do not use generic blue/yellow. Rely strictly on the custom color palette.",
+    "Implement the Flipkart-style layout: sticky top navigation (search + cart + login), secondary category navigation bar, and left sidebar for filters on listing pages.",
+    "Product cards must be grid-based, high-density, but spaced elegantly using E1 padding rules (e.g., p-4 on cards).",
+    "Use solid background colors for headers and dropdowns. NO transparent backgrounds for content-overlaying elements.",
+    "Implement 'data-testid' on all interactive elements (e.g., buttons, input fields, navigation links).",
+    "Include hover states and focus outlines for all interactive elements to ensure accessibility.",
+    "For the UI components, you can use HTML/Tailwind for structural layouts and customized Shadcn components for complex interactions like Modals, Dropdowns, Selects, and Tabs."
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "Do not create generic centered layouts. Ensure layered design with z-index hierarchy.",
+    "Add micro-animations for hover states and transitions on interactive elements. Static UIs are dead.",
+    "Use 2-3x more spacing than feels comfortable to avoid cramped designs, but balance this with Flipkart's high-density commerce pattern by keeping individual product cards compact but grid gaps generous.",
+    "Never use AI emoji characters for icons.",
+    "Use Sonner for toast notifications.",
+    "Prioritize optical alignment over geometrical alignment.",
+    "Do not apply global 'transition: all' styles."
+  ]
+}

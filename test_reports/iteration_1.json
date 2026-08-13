@@ -1,0 +1,39 @@
+{
+  "summary": "Latency-sensitive first-finish testing of TerraMart. All 4 targeted backend endpoints work correctly. Frontend core flows (home, category, product detail, cart, buyer signup+logout, seller signup+dashboard) all pass. Only minor spec drift in category nav slugs.",
+  "tested_scope": ["backend", "frontend", "auth", "integration"],
+  "passed": [
+    "Backend: POST /api/auth/register (buyer) returns 200 with token",
+    "Backend: GET /api/auth/me with Bearer token returns 200 + user object",
+    "Backend: GET /api/seller/dashboard with buyer Bearer returns 403 'Seller access required' (NOT 401)",
+    "Backend: seller1 login + GET /api/seller/dashboard returns 200 with seller + stats (products:4, revenue:45000, rating:4.5)",
+    "Backend: POST /api/products/{id}/reviews with buyer token returns 200; product rating aggregate updated (reviews_count=1)",
+    "Frontend: Homepage renders header-logo, header-search-input, header-cart-link, header-login-link, header-seller-link, banner-carousel; 7 category-nav links render",
+    "Frontend: /category/tiles renders products-grid with 4 product cards; filter-min-price, filter-max-price, filter-rating-4, sort-select all present",
+    "Frontend: Product detail page loads, thumbnails switch main image, variant selection works, add-to-cart triggers sticky-cart",
+    "Frontend: Cart page shows 2 items with qty-inc, qty-dec, remove controls all functional",
+    "Frontend: Buyer signup with unique email redirects to /, header-account-btn renders with user initials",
+    "Frontend: header-account-btn -> header-logout-btn logs out, header-login-link reappears",
+    "Frontend: Seller signup redirects to /seller/dashboard; seller-stats visible; 'Verification pending' badge shown for new seller; add-product-btn visible"
+  ],
+  "failed": [
+    {
+      "area": "spec-drift / category nav slugs",
+      "issue": "Review request expected data-testids cat-nav-sanitaryware, cat-nav-hardware, cat-nav-lighting but actual app exposes cat-nav-wall-stencils, cat-nav-wall-stickers, cat-nav-home-decor (categories API returns tiles, wall-stencils, wall-stickers, wallpapers, paints, home-decor, flooring)",
+      "evidence": "GET /api/categories returned 7 categories with different slugs than review spec; UI still renders exactly 7 nav links",
+      "priority": "LOW"
+    },
+    {
+      "area": "test-verification only",
+      "issue": "Could not verify price_asc sort ordering because product cards do not expose a data-testid starting with 'product-price-' (price cell has no dedicated testid). Sort dropdown itself works and reloads grid.",
+      "evidence": "product-price-* selector returned 0 elements after selecting price_asc",
+      "priority": "LOW"
+    }
+  ],
+  "action_items": [
+    "Optional: Add data-testid='product-price-{id}' on product card price element to make price sort verifiable in tests",
+    "Optional: Reconcile review-request category slug list with actual categories (tiles, wall-stencils, wall-stickers, wallpapers, paints, home-decor, flooring)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "~95%"},
+  "retest_needed": false,
+  "full_testing_deferred": true
+}

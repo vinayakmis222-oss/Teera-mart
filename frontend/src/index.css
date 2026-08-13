@@ -1,0 +1,94 @@
+@import url("https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@400,500,700,800&f[]=manrope@400,500,600,700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 32 33% 95%;
+    --foreground: 0 0% 17%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 17%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 17%;
+    --primary: 18 55% 50%;
+    --primary-foreground: 32 33% 95%;
+    --secondary: 33 24% 91%;
+    --secondary-foreground: 0 0% 17%;
+    --muted: 33 24% 91%;
+    --muted-foreground: 0 0% 36%;
+    --accent: 22 60% 92%;
+    --accent-foreground: 18 55% 50%;
+    --destructive: 1 47% 47%;
+    --destructive-foreground: 32 33% 95%;
+    --border: 30 20% 85%;
+    --input: 30 20% 85%;
+    --ring: 18 55% 50%;
+    --radius: 6px;
+  }
+}
+
+html, body, #root {
+  background: #F7F3EF;
+  color: #2B2B2B;
+}
+
+body {
+  margin: 0;
+  font-family: "Manrope", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "ss01", "cv11";
+}
+
+h1, h2, h3, h4, h5 {
+  font-family: "Cabinet Grotesk", "Manrope", system-ui, sans-serif;
+  letter-spacing: -0.01em;
+  color: #2B2B2B;
+}
+
+.font-heading { font-family: "Cabinet Grotesk", "Manrope", system-ui, sans-serif; }
+
+::selection { background: #C4633A; color: #F7F3EF; }
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #EFEAE4; }
+::-webkit-scrollbar-thumb { background: #C4633A; border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: #A6512B; }
+
+/* Grid pattern background */
+.bg-grid-terracotta {
+  background-image: linear-gradient(rgba(196,99,58,0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(196,99,58,0.05) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* Grain texture */
+.grain::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.35'/%3E%3C/svg%3E");
+  opacity: 0.05;
+  mix-blend-mode: multiply;
+}
+
+@layer components {
+  .btn-terracotta {
+    @apply inline-flex items-center justify-center gap-2 bg-terracotta text-off-white px-6 py-3 font-medium tracking-tight transition-colors duration-200 hover:bg-terracotta-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta focus-visible:ring-offset-2 focus-visible:ring-offset-off-white disabled:opacity-50;
+  }
+  .btn-outline-charcoal {
+    @apply inline-flex items-center justify-center gap-2 border-2 border-charcoal text-charcoal px-6 py-3 font-medium tracking-tight transition-colors duration-200 hover:bg-charcoal hover:text-off-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-terracotta;
+  }
+  .badge-rating {
+    @apply inline-flex items-center gap-1 bg-sage text-white text-xs font-bold px-2 py-0.5 rounded-sm;
+  }
+  .container-x {
+    @apply max-w-[1400px] mx-auto px-4 md:px-8;
+  }
+}
+
+* { border-color: #E5DFD7; }
