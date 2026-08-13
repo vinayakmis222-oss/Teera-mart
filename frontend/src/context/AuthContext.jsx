@@ -45,8 +45,37 @@ export function AuthProvider({ children }) {
     setUser(false);
   };
 
+  const otpSend = async (phone) => {
+    try {
+      const { data } = await api.post("/auth/otp/send", { phone });
+      return { ok: true, ...data };
+    } catch (e) {
+      return { ok: false, error: formatApiErrorDetail(e.response?.data?.detail) || e.message };
+    }
+  };
+
+  const otpVerify = async (phone, otp, name) => {
+    try {
+      const { data } = await api.post("/auth/otp/verify", { phone, otp, name });
+      setUser(data);
+      return { ok: true, user: data };
+    } catch (e) {
+      return { ok: false, error: formatApiErrorDetail(e.response?.data?.detail) || e.message };
+    }
+  };
+
+  const updateProfile = async (payload) => {
+    try {
+      const { data } = await api.patch("/auth/me", payload);
+      setUser(data);
+      return { ok: true, user: data };
+    } catch (e) {
+      return { ok: false, error: formatApiErrorDetail(e.response?.data?.detail) || e.message };
+    }
+  };
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout, refresh }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, refresh, otpSend, otpVerify, updateProfile }}>
       {children}
     </AuthContext.Provider>
   );

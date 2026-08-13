@@ -15,6 +15,13 @@ import SellerLoginPage from "./pages/SellerLoginPage";
 import SellerSignupPage from "./pages/SellerSignupPage";
 import SellerDashboardPage from "./pages/SellerDashboardPage";
 import CartPage from "./pages/CartPage";
+import CheckoutPage from "./pages/CheckoutPage";
+import OrderConfirmationPage from "./pages/OrderConfirmationPage";
+import AccountLayout from "./pages/AccountLayout";
+import AccountProfilePage from "./pages/AccountProfilePage";
+import MyOrdersPage from "./pages/MyOrdersPage";
+import OrderDetailPage from "./pages/OrderDetailPage";
+import AddressesPage from "./pages/AddressesPage";
 import "./App.css";
 
 export default function App() {
@@ -36,6 +43,14 @@ export default function App() {
                 <Route path="/seller/signup" element={<SellerSignupPage />} />
                 <Route path="/seller/dashboard" element={<SellerDashboardPage />} />
                 <Route path="/cart" element={<CartPage />} />
+                <Route path="/checkout" element={<CheckoutPage />} />
+                <Route path="/order/success/:id" element={<OrderConfirmationPage />} />
+                <Route path="/account" element={<AccountLayout />}>
+                  <Route index element={<AccountProfilePage />} />
+                  <Route path="orders" element={<MyOrdersPage />} />
+                  <Route path="orders/:id" element={<OrderDetailPage />} />
+                  <Route path="addresses" element={<AddressesPage />} />
+                </Route>
               </Routes>
             </main>
             <Footer />

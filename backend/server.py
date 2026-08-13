@@ -102,6 +102,44 @@ class ReviewIn(BaseModel):
     comment: str
     author_name: Optional[str] = None
 
+class AddressIn(BaseModel):
+    name: str
+    phone: str
+    pincode: str
+    line1: str
+    line2: Optional[str] = ""
+    city: str
+    state: str
+    type: Literal["home", "work", "other"] = "home"
+    is_default: bool = False
+
+class ProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
+
+class OtpSendIn(BaseModel):
+    phone: str
+
+class OtpVerifyIn(BaseModel):
+    phone: str
+    otp: str
+    name: Optional[str] = None
+
+class CouponApplyIn(BaseModel):
+    code: str
+    subtotal: float
+
+class OrderItemIn(BaseModel):
+    product_id: str
+    variant: Optional[str] = None
+    qty: int = Field(ge=1)
+
+class OrderCreateIn(BaseModel):
+    items: List[OrderItemIn]
+    address_id: str
+    payment_method: Literal["upi", "card", "netbanking", "cod"]
+    coupon_code: Optional[str] = None
+
 # ------------------ AUTH ROUTES ------------------
 @api.post("/auth/register")
 async def register(body: RegisterIn, response: Response):
@@ -283,6 +321,213 @@ async def seller_dashboard(user: dict = Depends(require_seller)):
         },
     }
 
+# ------------------ PROFILE & ADDRESSES ------------------
+@api.patch("/auth/me")
+async def update_profile(body: ProfileUpdate, user: dict = Depends(get_current_user)):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if updates:
+        await db.users.update_one({"id": user["id"]}, {"$set": updates})
+    updated = await db.users.find_one({"id": user["id"]}, {"password_hash": 0, "_id": 0})
+    return updated
+
+@api.get("/addresses")
+async def list_addresses(user: dict = Depends(get_current_user)):
+    return await db.addresses.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
+
+@api.post("/addresses")
+async def add_address(body: AddressIn, user: dict = Depends(get_current_user)):
+    doc = body.model_dump()
+    doc["id"] = str(uuid.uuid4())
+    doc["user_id"] = user["id"]
+    doc["created_at"] = datetime.now(timezone.utc).isoformat()
+    if doc["is_default"]:
+        await db.addresses.update_many({"user_id": user["id"]}, {"$set": {"is_default": False}})
+    if await db.addresses.count_documents({"user_id": user["id"]}) == 0:
+        doc["is_default"] = True
+    await db.addresses.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api.patch("/addresses/{address_id}")
+async def update_address(address_id: str, body: AddressIn, user: dict = Depends(get_current_user)):
+    existing = await db.addresses.find_one({"id": address_id, "user_id": user["id"]})
+    if not existing:
+        raise HTTPException(404, "Address not found")
+    updates = body.model_dump()
+    if updates.get("is_default"):
+        await db.addresses.update_many({"user_id": user["id"]}, {"$set": {"is_default": False}})
+    await db.addresses.update_one({"id": address_id}, {"$set": updates})
+    updated = await db.addresses.find_one({"id": address_id}, {"_id": 0})
+    return updated
+
+@api.delete("/addresses/{address_id}")
+async def delete_address(address_id: str, user: dict = Depends(get_current_user)):
+    res = await db.addresses.delete_one({"id": address_id, "user_id": user["id"]})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Address not found")
+    return {"ok": True}
+
+# ------------------ OTP (MOCK) ------------------
+@api.post("/auth/otp/send")
+async def otp_send(body: OtpSendIn):
+    if len(body.phone) < 10:
+        raise HTTPException(400, "Invalid phone number")
+    # MOCK: any 6-digit code works. Return a demo code for UX (not stored).
+    return {"ok": True, "message": "OTP sent. Use any 6-digit code (mock).", "demo_otp": "123456"}
+
+@api.post("/auth/otp/verify")
+async def otp_verify(body: OtpVerifyIn, response: Response):
+    if not body.otp or len(body.otp) != 6 or not body.otp.isdigit():
+        raise HTTPException(400, "OTP must be a 6-digit number")
+    phone = body.phone.strip()
+    user = await db.users.find_one({"phone": phone})
+    if not user:
+        uid = str(uuid.uuid4())
+        pseudo_email = f"user_{phone}@phone.terramart.local"
+        user = {
+            "id": uid,
+            "email": pseudo_email,
+            "phone": phone,
+            "name": body.name or f"User {phone[-4:]}",
+            "role": "buyer",
+            "password_hash": hash_password(str(uuid.uuid4())),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.users.insert_one(user)
+    access = create_token(user["id"], user["email"], user["role"], "access")
+    refresh = create_token(user["id"], user["email"], user["role"], "refresh")
+    set_auth_cookies(response, access, refresh)
+    return {"id": user["id"], "email": user["email"], "name": user["name"], "role": user["role"], "phone": user.get("phone"), "token": access}
+
+# ------------------ COUPONS (MOCK) ------------------
+COUPONS = {
+    "WELCOME10": {"type": "percent", "value": 10, "max_off": 500, "min_order": 0, "label": "10% off up to ₹500"},
+    "TERRA200":  {"type": "flat",    "value": 200, "min_order": 1500, "label": "Flat ₹200 off on ₹1500+"},
+    "FIRSTBUY":  {"type": "percent", "value": 15, "max_off": 800, "min_order": 999, "label": "15% off up to ₹800 (min ₹999)"},
+}
+
+@api.get("/coupons")
+async def list_coupons():
+    return [{"code": k, **v} for k, v in COUPONS.items()]
+
+@api.post("/coupons/apply")
+async def apply_coupon(body: CouponApplyIn):
+    code = body.code.strip().upper()
+    if code not in COUPONS:
+        raise HTTPException(400, "Invalid coupon code")
+    c = COUPONS[code]
+    if body.subtotal < c.get("min_order", 0):
+        raise HTTPException(400, f"Minimum order ₹{c['min_order']} required for {code}")
+    if c["type"] == "percent":
+        discount = min(body.subtotal * c["value"] / 100, c.get("max_off", 1e9))
+    else:
+        discount = c["value"]
+    return {"code": code, "discount": round(discount, 2), "label": c["label"]}
+
+# ------------------ ORDERS ------------------
+STATUS_FLOW = ["placed", "shipped", "out_for_delivery", "delivered", "cancelled"]
+
+@api.post("/orders")
+async def create_order(body: OrderCreateIn, user: dict = Depends(get_current_user)):
+    address = await db.addresses.find_one({"id": body.address_id, "user_id": user["id"]}, {"_id": 0})
+    if not address:
+        raise HTTPException(400, "Delivery address not found")
+
+    # snapshot items with product + seller info
+    items = []
+    seller_ids = set()
+    subtotal = 0.0
+    for it in body.items:
+        p = await db.products.find_one({"id": it.product_id}, {"_id": 0})
+        if not p:
+            raise HTTPException(400, f"Product {it.product_id} not found")
+        variant_delta = 0.0
+        variant_value = it.variant
+        if variant_value:
+            v = next((v for v in p.get("variants", []) if v.get("value") == variant_value), None)
+            variant_delta = (v or {}).get("price_delta", 0.0)
+        line_price = p["price"] + variant_delta
+        items.append({
+            "product_id": p["id"],
+            "seller_id": p["seller_id"],
+            "title": p["title"],
+            "image": (p.get("images") or [""])[0],
+            "variant": variant_value,
+            "price": line_price,
+            "qty": it.qty,
+            "line_total": round(line_price * it.qty, 2),
+        })
+        seller_ids.add(p["seller_id"])
+        subtotal += line_price * it.qty
+
+    delivery = 0 if subtotal >= 999 else 49
+    discount = 0.0
+    coupon_label = None
+    if body.coupon_code:
+        code = body.coupon_code.strip().upper()
+        c = COUPONS.get(code)
+        if c and subtotal >= c.get("min_order", 0):
+            discount = min(subtotal * c["value"] / 100, c.get("max_off", 1e9)) if c["type"] == "percent" else c["value"]
+            coupon_label = c["label"]
+
+    total = round(subtotal + delivery - discount, 2)
+    order_id = str(uuid.uuid4())
+    short_id = "TM" + order_id.replace("-", "")[:8].upper()
+
+    order = {
+        "id": order_id,
+        "short_id": short_id,
+        "user_id": user["id"],
+        "items": items,
+        "seller_ids": list(seller_ids),
+        "address": address,
+        "payment_method": body.payment_method,
+        "coupon_code": body.coupon_code,
+        "coupon_label": coupon_label,
+        "subtotal": round(subtotal, 2),
+        "delivery_charge": delivery,
+        "discount": round(discount, 2),
+        "total": total,
+        "status": "placed",
+        "status_history": [{"status": "placed", "at": datetime.now(timezone.utc).isoformat()}],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "estimated_delivery": (datetime.now(timezone.utc) + timedelta(days=5)).isoformat(),
+    }
+    await db.orders.insert_one(order)
+    order.pop("_id", None)
+    return order
+
+@api.get("/orders")
+async def list_orders(user: dict = Depends(get_current_user)):
+    return await db.orders.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(200)
+
+@api.get("/orders/{order_id}")
+async def get_order(order_id: str, user: dict = Depends(get_current_user)):
+    o = await db.orders.find_one({"id": order_id, "user_id": user["id"]}, {"_id": 0})
+    if not o:
+        raise HTTPException(404, "Order not found")
+    # enrich with seller names
+    sellers = await db.sellers.find({"id": {"$in": o.get("seller_ids", [])}}, {"_id": 0}).to_list(50)
+    seller_map = {s["id"]: s for s in sellers}
+    for it in o["items"]:
+        it["seller"] = seller_map.get(it["seller_id"])
+    return o
+
+@api.patch("/orders/{order_id}/status")
+async def update_order_status(order_id: str, status: str, user: dict = Depends(get_current_user)):
+    if status not in STATUS_FLOW:
+        raise HTTPException(400, "Invalid status")
+    if user["role"] not in ("seller", "admin"):
+        raise HTTPException(403, "Only sellers/admin can update status")
+    o = await db.orders.find_one({"id": order_id})
+    if not o:
+        raise HTTPException(404, "Order not found")
+    await db.orders.update_one({"id": order_id}, {
+        "$set": {"status": status},
+        "$push": {"status_history": {"status": status, "at": datetime.now(timezone.utc).isoformat()}},
+    })
+    return {"ok": True, "status": status}
+
 # ------------------ SEED ------------------
 SEED_SELLERS = [
     {"business_name": "TerraStone Ceramics", "gst": "27ABCDE1234F1Z5", "email": "seller1@terramart.com", "password": "Seller@123", "verified": True, "rating": 4.5},
@@ -425,8 +670,12 @@ async def seed_data():
 @app.on_event("startup")
 async def startup():
     await db.users.create_index("email", unique=True)
+    await db.users.create_index("phone")
     await db.products.create_index("category")
     await db.products.create_index("seller_id")
+    await db.orders.create_index("user_id")
+    await db.orders.create_index("seller_ids")
+    await db.addresses.create_index("user_id")
     await seed_data()
 
 @app.on_event("shutdown")

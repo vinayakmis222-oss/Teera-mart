@@ -1,5 +1,5 @@
 import { Link, useNavigate } from "react-router-dom";
-import { Search, ShoppingCart, User, Store, LogOut } from "lucide-react";
+import { Search, ShoppingCart, User, Store, LogOut, Package } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useCart } from "../context/CartContext";
@@ -61,6 +61,16 @@ export default function Header() {
                   <div className="text-sm font-medium text-charcoal truncate">{user.email}</div>
                   <div className="text-[10px] uppercase tracking-widest text-terracotta font-semibold mt-1">{user.role}</div>
                 </div>
+                {user.role === "buyer" && (
+                  <>
+                    <Link data-testid="header-account-link" to="/account" className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-off-white text-charcoal">
+                      <User className="w-4 h-4" /> My Account
+                    </Link>
+                    <Link data-testid="header-orders-link" to="/account/orders" className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-off-white text-charcoal">
+                      <Package className="w-4 h-4" /> My Orders
+                    </Link>
+                  </>
+                )}
                 {user.role === "seller" && (
                   <Link data-testid="header-seller-dashboard-link" to="/seller/dashboard" className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-off-white text-charcoal">
                     <Store className="w-4 h-4" /> Seller Dashboard

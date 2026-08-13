@@ -1,0 +1,71 @@
+{
+  "summary": "Phase 2 testing (buyer checkout + account). Backend: 10/10 pytest tests PASS (coupons, OTP, addresses CRUD, orders with seller_id, TM short_id, buyer-403 status guard). Frontend: unauthenticated guards work, OTP signup works, cart+coupon apply/remove works, checkout stepper Address→Payment→Review works, order is CREATED (POST /api/orders returns 200). CRITICAL BUG: after order placement, user is redirected to empty /cart instead of /order/success/{id}, so Order Confirmation and post-order tracking cannot be reached via the UI.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "CheckoutPage.place()",
+        "issue": "After successful POST /api/orders (200), UI navigates to /cart instead of /order/success/{id}. Order is stored in DB but the confirmation screen, order-id, order-eta, track-order-btn and order-tracker are never reachable via the UI. GET /api/orders/{id} is never even fired.",
+        "selector": "[data-testid=\"place-order-btn\"] -> expected [data-testid=\"order-id\"]",
+        "priority": "CRITICAL"
+      },
+      {
+        "component": "AccountLayout sidebar",
+        "issue": "Spec asked for data-testid `account-nav-orders` but code produces `account-nav-my-orders` (label 'My Orders' -> lower-kebab). Sidebar link works, just naming drift.",
+        "selector": "[data-testid=\"account-nav-my-orders\"]",
+        "priority": "LOW"
+      },
+      {
+        "component": "AddressesPage",
+        "issue": "Uses data-testid `new-address-btn` (not `add-address-btn` used on CheckoutPage). Inconsistent naming for the same action across pages.",
+        "selector": "[data-testid=\"new-address-btn\"]",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Place order -> Order confirmation -> Track order",
+        "issue": "Blocked by the checkout redirect bug above. Order Confirmation page (/order/success/:id), order-id, order-eta, track-order-btn, order-tracker with 4 steps and seller-group-{seller_id} could NOT be verified via UI because navigation never reaches that page. Backend data supports these (short_id starts with 'TM', items have seller_id, status='placed', /api/orders/{id} enriches item.seller).",
+        "affected_selectors": ["order-id", "order-eta", "track-order-btn", "order-tracker", "tracker-step-placed", "seller-group-*"]
+      }
+    ],
+    "design_issues": []
+  },
+  "rca_of_the_issue": "In /app/frontend/src/pages/CheckoutPage.jsx (place()), the sequence is: await api.post('/orders', ...); clear(); sessionStorage.removeItem(...); nav(`/order/success/${data.id}`, {replace:true}). Because React 18 batches these updates, `clear()` sets cart items to [] and `nav()` sets router state in the same batch. During the same render pass CheckoutPage still mounts (URL transition in-flight) and its top-level guard `if (items.length === 0) return <Navigate to='/cart' replace />` executes with the new empty cart, which redirects to /cart, overriding the imperative nav to /order/success/{id}. FIX (any of): (a) call nav() BEFORE clear(); (b) gate the empty-cart guard with a `placing` / `placed` flag so it doesn't fire while the order is being placed/redirected; (c) navigate with a small setTimeout(0) or React's flushSync around nav to force a router commit before state clear; (d) delay `clear()` to after navigation (e.g., in a useEffect on the confirmation page). Simplest fix: swap the two lines so nav happens before clear.",
+  "reproduction_steps": [
+    "1) Sign up as buyer via /signup (OTP tab, any 10-digit phone + 123456)",
+    "2) Add any product to cart",
+    "3) Go to /cart -> click checkout-btn",
+    "4) Add a new address, continue -> select payment -> continue -> Review -> click place-order-btn",
+    "5) Observed: URL becomes /cart with 'Your cart is empty'. Expected: /order/success/{id} with order-id starting with 'TM'.",
+    "Note: backend POST /api/orders returns 200 and order IS persisted (visible in Mongo & via /api/orders list)."
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_phase2.py",
+    "/app/test_reports/pytest/phase2_results.xml"
+  ],
+  "action_items": [
+    "CRITICAL: Fix CheckoutPage.place() ordering so nav('/order/success/{id}') is not overridden by the CheckoutPage empty-cart Navigate guard after clear(). Recommended: call nav() before clear(), or add a `placed` flag that suppresses the empty-cart guard.",
+    "LOW: Reconcile data-testid naming: `account-nav-orders` (spec) vs `account-nav-my-orders` (actual), and `add-address-btn` (checkout) vs `new-address-btn` (account addresses).",
+    "LOW: Consider a data-testid on the profile name input for automated verification (currently only `profile-save` exists)."
+  ],
+  "critical_code_review_comments": [
+    "CheckoutPage place() has ordering bug — see RCA. This is the primary defect.",
+    "server.py: PATCH /api/orders/{order_id}/status uses `status` as query string parameter. Works but non-idiomatic; body param would be cleaner.",
+    "server.py: apply_coupon and create_order duplicate the discount calculation logic — extract a helper to avoid drift.",
+    "AddressesPage uses `new-address-btn` while CheckoutPage uses `add-address-btn` for the same intent — pick one convention."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase2.py (new)",
+    "/app/backend/tests/__init__.py (new)"
+  ],
+  "success_rate": {"backend": "100% (10/10 phase-2 endpoints)", "frontend": "~70% (cart, coupon, checkout stepper, address form, OTP signup, account nav & profile pass; order confirmation + tracking UI unreachable due to checkout redirect bug)"},
+  "test_credentials": "Buyer: create fresh via /signup (OTP) with any 10-digit phone + any 6-digit OTP (e.g. 123456). Seller: seller1@terramart.com / Seller@123.",
+  "seed_data_creation": "None. Only test users created via OTP signup and TEST_ email registrations (auto-cleanup not implemented; buyer records remain in DB harmlessly).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "After main agent fixes the CheckoutPage place() redirect bug, re-run the full checkout flow to verify /order/success/{id} loads with order-id (TM-prefix), order-eta, then track-order-btn -> /account/orders/{id} shows order-tracker with 4 tracker-step-* and seller-group-{seller_id}. Backend already validated via /app/backend/tests/test_phase2.py — just re-run pytest to confirm no regressions."
+}

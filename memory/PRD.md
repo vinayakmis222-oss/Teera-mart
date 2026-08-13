@@ -23,6 +23,14 @@ Full-stack multi-vendor e-commerce marketplace for construction materials & home
 - Local-storage cart with sticky floating cart button + full cart page (qty controls, subtotal)
 - Sonner toasts, mobile-first responsive, data-testid attributes on interactive elements
 
+## Implemented (Phase 2 — 2026-02): Buyer Checkout & Account
+- Cart Page: line items with variant/qty/remove, price breakdown (subtotal/delivery/discount/total), coupon apply/remove with quick-pick chips, free-delivery meter, sticky mobile "Proceed to Checkout" bar
+- Multi-step Checkout (Address → Payment → Review): saved address selection, inline new-address form, payment method selection (UPI/Card/Netbanking/COD - UI only), review, place order
+- Order Confirmation screen: TM-prefixed order ID, estimated delivery date, item list, total paid, Track Order & Continue Shopping actions
+- Buyer Login/Signup: email/password AND mobile+OTP (MOCKED — any 6-digit code) tabs
+- Buyer Account section: sidebar (Profile/My Orders/Addresses/Logout), Profile edit (name, phone), Addresses CRUD (home/work/other, default), My Orders list with status pills, Order Detail with 4-stage progress tracker (Placed → Shipped → Out for Delivery → Delivered), items grouped by seller with verified badge
+- Backend: Address CRUD, Coupons (WELCOME10/TERRA200/FIRSTBUY) with validation, Orders (create with snapshot per item incl. seller_id, list, get with seller enrichment, admin/seller status update), OTP mock endpoints
+
 ## Backlog / Next
 ### P0
 - Product management (seller CRUD) with image uploads (object storage)
