@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { Plus, MapPin, Trash2, Edit3, Home, Briefcase } from "lucide-react";
+import { SERVICEABLE_PINCODE, SERVICEABLE_AREAS } from "../context/DeliveryContext";
 import { toast } from "sonner";
 
 export default function AddressesPage() {
@@ -66,10 +67,15 @@ export default function AddressesPage() {
 }
 
 function AddrForm({ existing, onClose, onSaved }) {
-  const [f, setF] = useState(existing || { name: "", phone: "", pincode: "", line1: "", line2: "", city: "", state: "", type: "home", is_default: false });
+  const [f, setF] = useState(existing || { name: "", phone: "", pincode: SERVICEABLE_PINCODE, line1: "", line2: "", city: "Lucknow", state: "Uttar Pradesh", type: "home", is_default: false });
   const [busy, setBusy] = useState(false);
+  const pinBad = f.pincode && f.pincode !== SERVICEABLE_PINCODE;
   const submit = async (e) => {
     e.preventDefault();
+    if (f.pincode !== SERVICEABLE_PINCODE) {
+      toast.error(`We deliver only to Pincode ${SERVICEABLE_PINCODE} (${SERVICEABLE_AREAS})`);
+      return;
+    }
     setBusy(true);
     try {
       if (existing) await api.patch(`/addresses/${existing.id}`, f);
@@ -84,30 +90,44 @@ function AddrForm({ existing, onClose, onSaved }) {
       <h3 className="font-heading font-semibold text-lg text-charcoal mb-4">{existing ? "Edit address" : "Add new address"}</h3>
       <form onSubmit={submit} className="space-y-3">
         <div className="grid md:grid-cols-2 gap-3">
-          <input required placeholder="Full name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} className="border-2 border-border focus:border-terracotta bg-off-white px-3 py-2 outline-none" />
-          <input required placeholder="Phone" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} className="border-2 border-border focus:border-terracotta bg-off-white px-3 py-2 outline-none" />
+          <input required data-testid="addr-name" placeholder="Full name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} className="border-2 border-border focus:border-terracotta bg-off-white px-3 py-2 outline-none" />
+          <input required data-testid="addr-phone" placeholder="Phone" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} className="border-2 border-border focus:border-terracotta bg-off-white px-3 py-2 outline-none" />
         </div>
-        <input required placeholder="Address line 1" value={f.line1} onChange={(e) => setF({ ...f, line1: e.target.value })} className="w-full border-2 border-border focus:border-terracotta bg-off-white px-3 py-2 outline-none" />
-        <input placeholder="Address line 2 (optional)" value={f.line2} onChange={(e) => setF({ ...f, line2: e.target.value })} className="w-full border-2 border-border focus:border-terracotta bg-off-white px-3 py-2 outline-none" />
+        <input required data-testid="addr-line1" placeholder="Address line 1" value={f.line1} onChange={(e) => setF({ ...f, line1: e.target.value })} className="w-full border-2 border-border focus:border-terracotta bg-off-white px-3 py-2 outline-none" />
+        <input data-testid="addr-line2" placeholder="Address line 2 (optional)" value={f.line2} onChange={(e) => setF({ ...f, line2: e.target.value })} className="w-full border-2 border-border focus:border-terracotta bg-off-white px-3 py-2 outline-none" />
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-          <input required placeholder="City" value={f.city} onChange={(e) => setF({ ...f, city: e.target.value })} className="border-2 border-border focus:border-terracotta bg-off-white px-3 py-2 outline-none" />
-          <input required placeholder="State" value={f.state} onChange={(e) => setF({ ...f, state: e.target.value })} className="border-2 border-border focus:border-terracotta bg-off-white px-3 py-2 outline-none" />
-          <input required placeholder="Pincode" value={f.pincode} onChange={(e) => setF({ ...f, pincode: e.target.value })} className="border-2 border-border focus:border-terracotta bg-off-white px-3 py-2 outline-none" />
+          <input required placeholder="City" value={f.city} onChange={(e) => setF({ ...f, city: e.target.value })} data-testid="addr-city" className="border-2 border-border focus:border-terracotta bg-off-white px-3 py-2 outline-none" />
+          <input required placeholder="State" value={f.state} onChange={(e) => setF({ ...f, state: e.target.value })} data-testid="addr-state" className="border-2 border-border focus:border-terracotta bg-off-white px-3 py-2 outline-none" />
+          <div>
+            <input
+              required
+              placeholder="Pincode"
+              value={f.pincode}
+              onChange={(e) => setF({ ...f, pincode: e.target.value.replace(/\D/g, "").slice(0, 6) })}
+              data-testid="addr-pincode"
+              className={`w-full border-2 focus:border-terracotta bg-off-white px-3 py-2 outline-none ${pinBad ? "border-destructive" : "border-border"}`}
+            />
+            {pinBad && (
+              <div className="text-[11px] text-destructive mt-1" data-testid="addr-pincode-error">
+                We deliver only to {SERVICEABLE_PINCODE}
+              </div>
+            )}
+          </div>
         </div>
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex gap-2">
             {["home", "work", "other"].map((t) => (
-              <button key={t} type="button" onClick={() => setF({ ...f, type: t })} className={`px-3 py-1.5 text-xs uppercase tracking-widest border-2 ${f.type === t ? "border-terracotta text-terracotta bg-terracotta/5" : "border-border text-charcoal-muted"}`}>{t}</button>
+              <button key={t} type="button" data-testid={`addr-type-${t}`} onClick={() => setF({ ...f, type: t })} className={`px-3 py-1.5 text-xs uppercase tracking-widest border-2 ${f.type === t ? "border-terracotta text-terracotta bg-terracotta/5" : "border-border text-charcoal-muted"}`}>{t}</button>
             ))}
           </div>
           <label className="text-sm inline-flex items-center gap-2 text-charcoal">
-            <input type="checkbox" checked={f.is_default} onChange={(e) => setF({ ...f, is_default: e.target.checked })} className="accent-terracotta" />
+            <input type="checkbox" checked={f.is_default} onChange={(e) => setF({ ...f, is_default: e.target.checked })} data-testid="addr-default" className="accent-terracotta" />
             Set as default
           </label>
         </div>
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-charcoal-muted hover:text-charcoal">Cancel</button>
-          <button type="submit" disabled={busy} className="btn-terracotta text-sm py-2 px-4">{busy ? "Saving…" : "Save"}</button>
+          <button type="submit" disabled={busy || pinBad} data-testid="addr-save" className="btn-terracotta text-sm py-2 px-4">{busy ? "Saving…" : "Save"}</button>
         </div>
       </form>
     </div>

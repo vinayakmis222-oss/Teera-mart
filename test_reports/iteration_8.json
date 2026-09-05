@@ -1,0 +1,60 @@
+{
+  "summary": "Phase 7 verification of seller single-product CRUD from the dashboard modal, live dashboard counters, forward-only order status flow, payouts/analytics tiles and empty-state onboarding. Backend: new /app/backend/tests/test_phase7_seller_products.py (14 tests) — all pass (seller product GET/POST/PATCH/DELETE with GET-verification, 400 on missing images / unknown category, 422 on price<=0, 404 on foreign product PATCH/DELETE, 401/403 RBAC for buyer+admin+anon, dashboard.stats shape + products/orders/delivered_orders/revenue cross-checked against /seller/products and /seller/orders, products count bumps after create, full forward-only flow placed->confirmed->packed->shipped->delivered with skip/backward rejection, location_link persisted, commission booked exactly once). Full suite: 126 passed / 4 failed — all 4 failures trace to a single pre-existing HIGH bug (new sellers get no subscription window). Frontend (Playwright, public URL): add-product modal end-to-end (title/category/price/stock/description/material/image URL/variant) -> toast 'Product added' -> modal closes -> new listing-row-{id} rendered -> stat-products 5->6; edit pre-filled -> price 899 reflected in row; delete with window.confirm -> row gone, stat-products back to 5; orders-table status dropdown advanced one order placed->confirmed->packed->shipped (window.prompt accepted empty)->delivered with toasts + pill updates; Payouts & Analytics tiles showed real values (Gross revenue Rs.32,962 -> Rs.33,461, Delivered orders 33 -> 34, Net after dues, dues Rs.0 -> Rs.50) i.e. not hardcoded. Fresh-seller empty state renders correctly but adding a product is blocked by the subscription bug.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/auth/register (role=seller) -> POST /api/seller/products & /api/seller/products/bulk", "issue": "Seller registration never sets subscription_expires_at, so _enrich_seller_status returns subscription_status='due' and every product-create call returns 403 'Renew your subscription to add products.'. Fresh-seller onboarding (the requested empty-state flow) is fully blocked; also fails 4 regression tests (test_phase6_new_seller_onboarding x2, test_phase5_admin::test_delete_seller_cascades, test_phase5_admin::test_delete_product). Repeat of the HIGH item from iteration_7 — still unfixed. Fix: set subscription_expires_at = now + settings.subscription_period_days when the seller profile is created.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "PATCH /api/seller/products/{id}", "issue": "Uses PATCH semantics but requires the full SellerProductIn payload — sending only {price} returns 400 (images missing) and any omitted field is overwritten with defaults (stock->0, material/description->''). Either make fields Optional and merge, or rename to PUT."},
+      {"endpoint": "PATCH /api/seller/orders/{id}/status", "issue": "Now that the flow is strictly one-step-forward, a repeated 'delivered' call returns 400, so the commission idempotency guard is unreachable in practice; the still-missing unique index on commission_dues(order_id, seller_id) remains the only race protection."},
+      {"endpoint": "PATCH /api/seller/products/{id}", "issue": "Does not refresh seller_verified on update, so a product created before verification keeps a stale seller_verified flag."},
+      {"endpoint": "PATCH /api/seller/orders/{id}/status", "issue": "location_link is only stored when status=='shipped'; sending it with another status is silently dropped (no 400/warning)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "SellerDashboardPage (due/expired subscription)", "issue": "add-product-btn / add-first-product-btn stay enabled for a seller with subscription_status='due'; clicking only surfaces a red toast from the 403. Should disable the buttons (or show an inline 'Renew to start listing' banner linking to /seller/subscription) so a brand-new seller is not dead-ended.", "selector": "[data-testid=\"add-product-btn\"], [data-testid=\"add-first-product-btn\"]", "priority": "MEDIUM"},
+      {"component": "AddEditProductModal", "issue": "Category list is hard-coded in the component instead of fetching GET /api/categories — will silently drift from backend CATEGORIES and cause 400 'Unknown category'.", "selector": "[data-testid=\"product-category\"]", "priority": "LOW"},
+      {"component": "SellerDashboardPage", "issue": "Delete uses native window.confirm and 'Mark Shipped' uses native window.prompt (no data-testid, no validation of the pasted map URL). Same note as iteration_7 for AdminDuesPage — prefer a shadcn dialog with a testid'd input.", "selector": "[data-testid^=\"delete-product-\"], [data-testid^=\"dash-status-\"]", "priority": "LOW"},
+      {"component": "Global (dev build)", "issue": "React console error on every page: 'In HTML, <span> cannot be a child of <option> ... will cause a hydration error'. No app code puts a span inside <option>, so it appears to come from the dev JSX instrumentation wrapper; verify it is absent in a production build.", "selector": "n/a", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "Fresh seller (/seller/signup) -> dashboard -> 'Add first product'", "issue": "Modal opens and submits, backend returns 403, toast 'Renew your subscription to add products.', modal stays open and stat-products remains 0. Blocked by the backend registration/subscription bug above.", "affected_selectors": ["[data-testid=\"add-first-product-btn\"]", "[data-testid=\"product-save-btn\"]", "[data-testid=\"stat-products\"]"]}
+    ],
+    "design_issues": [
+      {"screen": "Seller dashboard", "issues": ["Listings 'Your Listings (n)' header repeats an 'Add Product' button already present in the page header — duplicated primary action.", "Status pills use 10px uppercase text on tinted backgrounds (sage/ochre); the ochre 'PACKED' pill is the weakest contrast on white — bump to a darker shade.", "Stale demo listing 'Test tile from API' (created by an earlier iteration) is still live in seller1's catalogue — clean up seed/test residue."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase7_seller_products.py",
+    "/app/backend/tests/test_phase6_subscription_dues.py",
+    "/app/backend/tests/test_phase3.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "HIGH (repeat): grant an initial subscription window at seller registration (subscription_expires_at = now + settings.subscription_period_days) so new sellers can add/bulk-upload products; then re-run test_phase6_new_seller_onboarding.py and the 2 phase-5 tests.",
+    "Disable Add Product buttons + show a renew banner when stats.subscription_status !== 'active' instead of relying on a 403 toast.",
+    "Make PATCH /api/seller/products/{id} accept partial payloads (Optional fields + merge) or convert it to PUT.",
+    "Fetch categories in AddEditProductModal from GET /api/categories instead of the hard-coded array.",
+    "Replace window.confirm/window.prompt on the dashboard with shadcn dialogs carrying data-testids; validate the location link is a URL.",
+    "Add the unique index on commission_dues (order_id, seller_id)."
+  ],
+  "critical_code_review_comments": [
+    "server.py register(): seller profile insert omits subscription/commission fields that _enrich_seller_status and every product-create path depend on — that single omission causes all 4 remaining test failures.",
+    "seller_update_product() rebuilds the whole document from a PATCH body; any client that sends a subset silently zeroes stock/material/description.",
+    "seller_update_status() keeps a query-param fallback (body: SellerStatusIn = None) — dead compatibility path now that the frontend always sends JSON; drop it to avoid two validation routes.",
+    "server.py is 1578 lines — split into routers (auth, catalog, seller, orders, admin) per the 700-line guidance."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase7_seller_products.py",
+    "/app/backend/tests/test_phase3.py",
+    "/app/backend/tests/test_phase6_subscription_dues.py"
+  ],
+  "success_rate": {"backend": "97% (126/130 suite; 14/14 phase-7)", "frontend": "88% (add/edit/delete, orders status flow, payouts tiles, empty-state rendering all pass; fresh-seller add-product blocked)"},
+  "seed_data_creation": "Created and deleted transient TEST_ products for seller1, a TEST_ buyer + address, and one fresh seller (TEST_QA Fresh ...). All removed via _util_cleanup_test_sellers.py / _util_cleanup_test_products.py. One seller1 order (TM07451B7D) was advanced to delivered during UI testing, which added a Rs.50 commission due to seller1 — intentional, reflects real behaviour.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "seller1@terramart.com / Seller@123, admin@terramart.com / Admin@123 (from /app/memory/test_credentials.md)",
+  "context_for_next_testing_agent": "Use REACT_APP_BACKEND_URL from /app/frontend/.env (https://buildmat-bazaar.preview.emergentagent.com) — an older host name is dead. Python Playwright dialog handlers MUST be async (page.on('dialog', lambda d: asyncio.ensure_future(handler(d)))); a sync lambda calling d.accept() leaves the coroutine unawaited, the window.prompt on 'Mark Shipped' never resolves and the page freezes (screenshot times out). Stale phase-3/phase-6 tests were updated to the new forward-only flow (out_for_delivery is no longer a seller status; repeated 'delivered' now returns 400). Remaining 4 suite failures are all the new-seller-subscription bug. pytest.ini runs -n 2 --dist loadscope; phase-6 classes mutate shared seller1 state.",
+  "rca_of_the_issue": "POST /api/auth/register inserts the seller profile without subscription_expires_at (server.py lines 171-181). _enrich_seller_status therefore reports subscription_status='due', and seller_create_product / bulk upload both hard-require 'active', returning 403. Reproduce: register a seller via /seller/signup, open /seller/dashboard, click 'Add first product', save -> toast 'Renew your subscription to add products.' Mitigation: set subscription_expires_at = now + settings.subscription_period_days (trial) at profile creation, or allow the first N products while status='due'."
+}

@@ -1,0 +1,54 @@
+{
+  "summary": "Targeted regression re-verify of the two iteration_8 items. (1) HIGH: seller registration now grants a trial window — server.py register() inserts subscription_expires_at = now + settings.subscription_period_days (verified in code at lines 171-184 and via API). New pytest suite /app/backend/tests/test_phase8_seller_trial_regression.py (7 tests, all pass): fresh seller -> GET /api/seller/subscription = active with 29 days left and expiry ~now+30d, dashboard stats.subscription_status='active', POST /api/seller/products 200 with GET-verification (no _id leak), POST /api/seller/products/bulk 200, seeded seller1 still active, admin pause -> effective_paused=true + product create 403 -> unpause restores, forced past expiry -> status 'expired' + create 403 -> restored. Re-ran previously failing suites: test_phase6_new_seller_onboarding.py (2), test_phase5_admin.py (incl. test_delete_seller_cascades, test_delete_product) — ALL PASS. Combined run test_phase5_admin + test_phase7_seller_products + test_phase6_new_seller_onboarding + test_phase8 + test_auth_security = 63 passed / 0 failed (auth playbook checks: bcrypt $2b$, httpOnly cookies, CORS with credentials, brute-force lockout after 5, no password_hash leak — all pass). (2) MEDIUM frontend: fresh seller registered via /seller/signup lands on /seller/dashboard with add-product-btn ENABLED, no renew-banner, subscription 'active' 29 days; modal opened, saved 'Regression Tile' / tiles / 499 / image URL -> toast 'Product added', modal closed, stat-products=1, listing row rendered. Admin pause -> add-product-btn DISABLED, renew-banner correctly ABSENT, 'Account paused' shown in dues card, listing shows HIDDEN; unpause + forced expiry -> subscription 'expired', renew-banner visible with working 'Renew now' -> /seller/subscription, add-product-btn disabled. Sanity on seller1: add -> edit (price 888 reflected) -> delete (confirm dialog, row gone, stat-products back to 5), payouts tiles show real values (Gross Rs.38,055, Delivered 39, Net Rs.37,955, dues Rs.100), 5 order status dropdowns present. Both fixes confirmed working; QA seller and TEST_ products cleaned up.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/seller/orders", "issue": "Hard-capped at to_list(200) with no pagination, while GET /api/seller/dashboard stats.orders counts all documents. seller1 now has 208 orders, so the dashboard says 208 while the list can only ever return 200 — the 'Orders' tile and the orders list disagree and older orders are unreachable. Add skip/limit params (or return a total)."},
+      {"endpoint": "GET /api/seller/me", "issue": "Returns the raw seller doc without _enrich_seller_status, so effective_paused / subscription_status / pending_dues are absent, unlike /seller/dashboard which enriches. Inconsistent contract for the same resource; any client relying on /seller/me for gating will mis-behave."},
+      {"endpoint": "POST /api/seller/products vs POST /api/seller/products/bulk", "issue": "Field-name inconsistency: single create requires 'title', bulk create accepts 'name'. Sending 'name' to the single endpoint returns 422. Unify the schema."},
+      {"endpoint": "PATCH /api/seller/products/{id}", "issue": "(backlog, unchanged from iteration_8) requires the full SellerProductIn payload; omitted fields are reset. Also does not refresh seller_verified."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AddEditProductModal", "issue": "(unchanged, LOW) category list is hard-coded instead of GET /api/categories — can drift from backend CATEGORIES.", "selector": "[data-testid=\"product-category\"]", "priority": "LOW"},
+      {"component": "SellerDashboardPage", "issue": "(unchanged, LOW) delete uses native window.confirm and 'Mark Shipped' native window.prompt (no testids, no URL validation).", "selector": "[data-testid^=\"delete-product-\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Seller dashboard", "issues": ["Duplicate primary action: 'Add Product' appears in the page header and again in the 'Your Listings (n)' header (both correctly disabled when inactive).", "Stale seed/test residue still live in seller1's catalogue: listing 'Test tile from API'.", "Renew banner heading says 'Subscription expired — listings paused' while the subscription card separately says 'Products hidden from buyers until renewed' — slightly redundant messaging, but contrast/spacing on the ochre banner is acceptable."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase8_seller_trial_regression.py",
+    "/app/backend/tests/test_phase6_new_seller_onboarding.py",
+    "/app/backend/tests/test_phase5_admin.py",
+    "/app/backend/tests/test_phase7_seller_products.py",
+    "/app/backend/tests/_util_qa9_state.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Paginate GET /api/seller/orders (or return total) so it stops disagreeing with dashboard stats.orders once a seller passes 200 orders.",
+    "Enrich GET /api/seller/me with _enrich_seller_status (or document it as raw) for a consistent contract.",
+    "Unify product create field naming between /seller/products ('title') and /seller/products/bulk ('name').",
+    "Backlog (unchanged): partial PATCH for /seller/products/{id}, refresh seller_verified on update, unique index on commission_dues(order_id, seller_id), fetch categories from API, replace window.confirm/prompt with shadcn dialogs, clean 'Test tile from API' seed residue."
+  ],
+  "critical_code_review_comments": [
+    "register() trial grant is correct, but the same subscription-bootstrap logic is duplicated in the startup backfill (server.py:1554) and admin renew path — extract a single helper _grant_subscription(seller_id, days) to avoid future drift.",
+    "server.py is ~1582 lines; split into routers (auth, catalog, seller, orders, admin) per the 700-line guidance.",
+    "seller_orders() uses a magic 200 in to_list() — replace with explicit skip/limit query params."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase8_seller_trial_regression.py",
+    "/app/backend/tests/test_phase7_seller_products.py",
+    "/app/backend/tests/_util_qa9_state.py"
+  ],
+  "success_rate": {"backend": "100% (63/63 across phase5, phase6-onboarding, phase7, phase8, auth_security)", "frontend": "100% of targeted flows (fresh-seller add product, pause gating, expiry banner, seller1 add/edit/delete sanity)"},
+  "seed_data_creation": "Registered one fresh seller TEST_qa9_1788590140@example.com (Seller@123) for the UI regression, added 'Regression Tile', paused/unpaused and force-expired/restored it via /app/backend/tests/_util_qa9_state.py, then deleted the seller + its product via DELETE /api/admin/sellers/{id}. Pytest fixtures created and deleted TEST_p8trial_* sellers. seller1 got a transient TEST_QA9 Sanity Tile which was edited then deleted (product count back to 5).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@terramart.com / Admin@123, seller1@terramart.com / Seller@123 (from /app/memory/test_credentials.md)",
+  "context_for_next_testing_agent": "Both iteration_8 targeted bugs are FIXED and covered by /app/backend/tests/test_phase8_seller_trial_regression.py. Use REACT_APP_BACKEND_URL from /app/frontend/.env. Seller login testids: seller-login-email/password/submit (generic input[type=email] selectors do not submit reliably). Single product create requires 'title' (not 'name'); bulk uses 'name'. /seller/me is NOT enriched — read effective_paused from /seller/dashboard .seller. Playwright dialog handlers must be async (asyncio.ensure_future). test_phase7::TestDashboardStats now tolerates the /seller/orders 200-doc cap (seller1 has 208 orders); test_phase7::TestForwardOnlyStatus::test_full_forward_flow_and_violations failed once under -n 2 parallel load but passes in isolation (~flaky, shared seller1 order state).",
+  "flaky_tests": ["test_phase7_seller_products.py::TestForwardOnlyStatus::test_full_forward_flow_and_violations — 1 failure in 2 parallel runs, passes with -p no:randomly / isolation; shared seller1 orders are mutated by other classes"],
+  "rca_of_the_issue": "iteration_8 HIGH: register() omitted subscription_expires_at so _enrich_seller_status returned 'due' and product create returned 403. Fix verified: server.py:171-184 now computes trial_exp = now + settings['subscription_period_days'] and stores it on the seller doc, so a fresh seller is 'active' with ~29 days left and can create/bulk-upload immediately. MEDIUM: SellerDashboardPage now disables add-product-btn/add-first-product-btn when subscription_status !== 'active' || seller.effective_paused and renders data-testid=renew-banner (with a 'Renew now' link to /seller/subscription) only when subscription_status !== 'active' — verified for active, admin-paused and force-expired states."
+}

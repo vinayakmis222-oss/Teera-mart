@@ -1,0 +1,40 @@
+{
+  "summary": "Phase-4 re-verification of 3 regression fixes (PDP badges, /account/addresses form testids, CheckoutPage guard ordering) + Phase-4 core-flow sanity. Backend: full suite 63/63 passed (incl. test_phase4_delivery 9/9 — order 400 for non-226013, 200 for 226013). Frontend: FIX1, FIX2 (after I added 4 missing data-testids), FIX3 (all 4 guard permutations) and all sanity checks PASS. Note: /app/test_reports/iteration_5.json did not exist from the previous run, so this report reuses that slot.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Category /category/tiles + PDP Similar Products",
+        "issues": [
+          "Seed imagery mismatch: 'Terracotta Hexagon Floor Tile', 'Slate Grey Stone Look Tile' and 'Mosaic Blue Wave Tile' all render the SAME white Carrara-marble photo, so cards/similar-products look duplicated and images do not match titles.",
+          "Seller filter facet shows raw truncated ids ('Seller 1ec6a2', 'Seller e94122') instead of seller business names.",
+          "Sort control is a native browser <select> rather than the shadcn Select used elsewhere."
+        ]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase4_delivery.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Replace duplicated seed product images so each tile product has a matching, distinct image (affects Home, Category and PDP Similar Products).",
+    "Show seller business_name instead of truncated seller_id in the Category seller facet.",
+    "Optional: swap the native sort <select> for the shadcn Select component for visual consistency."
+  ],
+  "critical_code_review_comments": [
+    "AddressesPage.jsx AddrForm was shipped WITHOUT addr-name / addr-phone / addr-line1 / addr-line2 data-testids even though the fix note claimed they were added — I added them (in-scope). Please keep AddressesPage.AddrForm and CheckoutPage.AddressForm in sync; they are ~60 lines of duplicated form logic (DRY violation) and should be extracted into one shared <AddressForm/> component so testids/pin-lock rules cannot drift again.",
+    "CheckoutPage guard order is now correct (loading/user -> isServiceable -> items.length). Because isServiceable is false when NO pincode is stored, a first-time logged-in user hitting /checkout directly always sees checkout-blocked; the copy is reasonable but the 'Go back & verify pincode' button uses nav(-1) which can dead-end on a fresh tab — consider linking to '/' instead.",
+    "AddressesPage.jsx uses window.confirm() for delete instead of an AlertDialog."
+  ],
+  "updated_files": ["/app/frontend/src/pages/AddressesPage.jsx"],
+  "success_rate": { "backend": "100% (63/63)", "frontend": "100% of targeted regression + sanity checks" },
+  "seed_data_creation": "Buyer qa_p4b_1788583547@example.com / Buyer@123 (created via POST /api/auth/register) with one saved address 'TEST QA Buyer', 226013, type=work, default=true. One cart item left in that browser profile only (localStorage).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Buyer: qa_p4b_1788583547@example.com / Buyer@123 | Seller: seller1@terramart.com / Seller@123 | Admin: admin@terramart.com / Admin@123",
+  "context_for_next_testing_agent": "Verified this run — FIX1: similar-products renders 3 ProductCard (product-card-{id}) each with two-hour-badge; bought-together renders 4 bt-card-{id} each containing a two-hour-badge. FIX2: /account/addresses new-address-btn form exposes all 12 required testids (I added addr-name/addr-phone/addr-line1/addr-line2), pincode pre-filled '226013', entering 400001 shows addr-pincode-error and disables addr-save; saving a 226013 address works and the address appears at checkout. FIX3: nonserviceable(400001)+empty cart -> checkout-blocked; nonserviceable+non-empty -> checkout-blocked; serviceable+empty -> /cart redirect; serviceable+non-empty -> step-address with checkout-total Rs.948. Sanity: PDP pincode-checker gates add-to-cart/buy-now (both disabled for no-pin and 400001, enabled for 226013 — remember to click pincode-change-btn before re-filling pincode-input); home service-area-banner shows 'Mubarakpur, Bhitauli & Allu (226013)'; 16/16 home cards and 4/4 category cards have two-hour-badge; no sticky-cart/badge overlap observed. Only open items are seed-image duplication and seller-facet naming.",
+  "rca_of_the_issue": "Root cause of the one real gap found: the AddressesPage AddrForm was only partially instrumented — the pincode/city/state/type/default/save controls got testids in the previous fix pass but the name/phone/line1/line2 inputs were missed, so the Add-New form could not be filled by testid. Fixed by adding the 4 missing data-testid attributes (no functional change). All other reported regressions were already resolved; an earlier apparent failure of similar-products was a test-side 20s timeout on the /products/{id}/similar call plus a malformed base URL in my first script, both corrected."
+}

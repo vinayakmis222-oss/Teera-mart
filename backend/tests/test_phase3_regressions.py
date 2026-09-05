@@ -76,7 +76,7 @@ def buyer():
 @pytest.fixture(scope="module")
 def buyer_address(buyer):
     r = requests.post(f"{API}/addresses", headers=buyer["headers"], json={
-        "name": "TEST Reg Buyer", "phone": "9876543211", "pincode": "560001",
+        "name": "TEST Reg Buyer", "phone": "9876543211", "pincode": "226013",
         "line1": "2 Test Street", "city": "Bengaluru", "state": "Karnataka", "type": "home"})
     assert r.status_code in (200, 201), r.text
     body = r.json()

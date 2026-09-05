@@ -3,9 +3,11 @@ import { useParams } from "react-router-dom";
 import { api, inr } from "../lib/api";
 import { useCart } from "../context/CartContext";
 import { useAuth } from "../context/AuthContext";
+import { useDelivery } from "../context/DeliveryContext";
 import { Star, ShieldCheck, ShieldAlert, Truck, RotateCcw, ShoppingCart, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { SimilarProducts, BoughtTogether } from "../components/SimilarAndBundles";
+import PincodeChecker from "../components/PincodeChecker";
 
 export default function ProductDetailPage() {
   const { id } = useParams();
@@ -16,6 +18,7 @@ export default function ProductDetailPage() {
   const [rev, setRev] = useState({ rating: 5, comment: "" });
   const { addItem } = useCart();
   const { user } = useAuth();
+  const { isServiceable } = useDelivery();
 
   useEffect(() => {
     api.get(`/products/${id}`).then((r) => setP(r.data));
@@ -46,6 +49,7 @@ export default function ProductDetailPage() {
   };
 
   const doAdd = () => {
+    if (!isServiceable) { toast.error("Enter a serviceable pincode first (226013)"); return; }
     addItem(p, selectedVariants[0] || null, 1);
     toast.success("Added to cart");
   };
@@ -106,6 +110,8 @@ export default function ProductDetailPage() {
             {p.discount > 0 && <span className="text-terracotta font-semibold text-sm">{p.discount}% off</span>}
           </div>
 
+          <PincodeChecker />
+
           {/* Variants */}
           {Object.entries(groups).map(([name, arr]) => (
             <div key={name} className="mb-5">
@@ -131,10 +137,10 @@ export default function ProductDetailPage() {
           ))}
 
           <div className="flex gap-3 mt-6">
-            <button data-testid="add-to-cart-btn" onClick={doAdd} className="btn-terracotta flex-1">
+            <button data-testid="add-to-cart-btn" onClick={doAdd} disabled={!isServiceable} className="btn-terracotta flex-1 disabled:cursor-not-allowed">
               <ShoppingCart className="w-4 h-4" /> Add to Cart
             </button>
-            <button data-testid="buy-now-btn" onClick={doAdd} className="btn-outline-charcoal flex-1">
+            <button data-testid="buy-now-btn" onClick={doAdd} disabled={!isServiceable} className="btn-outline-charcoal flex-1 disabled:cursor-not-allowed disabled:opacity-50">
               <Zap className="w-4 h-4" /> Buy Now
             </button>
           </div>

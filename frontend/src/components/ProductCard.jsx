@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { Star } from "lucide-react";
+import { Star, Zap } from "lucide-react";
 import { useState } from "react";
 import { inr } from "../lib/api";
 
@@ -26,6 +26,9 @@ export default function ProductCard({ p }) {
             {discount}% off
           </div>
         )}
+        <div className="absolute bottom-2 left-2 bg-charcoal text-off-white text-[10px] font-bold uppercase tracking-wider px-2 py-1 inline-flex items-center gap-1" data-testid="two-hour-badge">
+          <Zap className="w-2.5 h-2.5 text-terracotta" /> 2-Hour Delivery
+        </div>
       </div>
       <div className="p-3 md:p-4 flex flex-col gap-2 flex-1">
         <h3 className="text-sm md:text-base font-medium text-charcoal line-clamp-2 leading-snug">{p.title}</h3>

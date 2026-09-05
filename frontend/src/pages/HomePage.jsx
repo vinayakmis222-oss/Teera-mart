@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import BannerCarousel from "../components/BannerCarousel";
 import ProductCard from "../components/ProductCard";
+import ServiceableAreaBanner from "../components/ServiceableAreaBanner";
 import { ArrowRight } from "lucide-react";
 
 function Section({ title, tag, href, products }) {
@@ -55,6 +56,7 @@ export default function HomePage() {
 
   return (
     <div>
+      <ServiceableAreaBanner />
       <BannerCarousel />
 
       {/* Category quick shop */}

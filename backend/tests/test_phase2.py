@@ -88,7 +88,7 @@ class TestAddresses:
     def test_address_crud(self, buyer_headers):
         # create first -> becomes default
         payload = {
-            "name": "Test User", "phone": "9876543210", "pincode": "560001",
+            "name": "Test User", "phone": "9876543210", "pincode": "226013",
             "line1": "1 Main St", "line2": "Apt 2", "city": "Bengaluru",
             "state": "KA", "type": "home", "is_default": False
         }
@@ -119,7 +119,7 @@ class TestOrders:
     def test_order_flow(self, buyer_headers, buyer_token):
         # Create an address
         r = requests.post(f"{API}/addresses", json={
-            "name": "OB", "phone": "9876543210", "pincode": "560001",
+            "name": "OB", "phone": "9876543210", "pincode": "226013",
             "line1": "1 St", "city": "BLR", "state": "KA", "type": "home"
         }, headers=buyer_headers)
         assert r.status_code == 200

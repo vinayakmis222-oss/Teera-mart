@@ -84,6 +84,11 @@ async def require_seller(user: dict = Depends(get_current_user)) -> dict:
         raise HTTPException(403, "Seller access required")
     return user
 
+async def require_admin(user: dict = Depends(get_current_user)) -> dict:
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Admin access required")
+    return user
+
 # ------------------ MODELS ------------------
 class RegisterIn(BaseModel):
     email: EmailStr
@@ -164,6 +169,8 @@ async def register(body: RegisterIn, response: Response):
     }
     await db.users.insert_one(user_doc)
     if body.role == "seller":
+        settings = await get_settings()
+        trial_exp = datetime.now(timezone.utc) + timedelta(days=settings["subscription_period_days"])
         await db.sellers.insert_one({
             "id": str(uuid.uuid4()),
             "user_id": uid,
@@ -172,6 +179,7 @@ async def register(body: RegisterIn, response: Response):
             "verified": False,
             "rating": 0.0,
             "total_sales": 0,
+            "subscription_expires_at": trial_exp.isoformat(),
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
     access = create_token(uid, email, body.role, "access")
@@ -181,6 +189,83 @@ async def register(body: RegisterIn, response: Response):
 
 MAX_LOGIN_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
+
+DEFAULT_SETTINGS = {
+    "subscription_price": 1.0,          # ₹ per month
+    "subscription_period_days": 30,
+    "default_commission_rate": 10.0,    # percent
+    "dues_threshold": 5000.0,           # ₹
+    "dues_grace_days": 15,
+}
+
+async def get_settings() -> dict:
+    doc = await db.settings.find_one({"key": "platform"}, {"_id": 0})
+    if not doc:
+        doc = {"key": "platform", **DEFAULT_SETTINGS}
+        await db.settings.insert_one(doc)
+        doc.pop("_id", None)
+    for k, v in DEFAULT_SETTINGS.items():
+        doc.setdefault(k, v)
+    return doc
+
+async def _seller_pending_dues(seller_id: str) -> tuple[float, Optional[str]]:
+    """Return (total_pending, oldest_pending_iso) for a seller."""
+    cursor = db.commission_dues.find({"seller_id": seller_id, "status": "pending"}, {"_id": 0})
+    total = 0.0
+    oldest = None
+    async for d in cursor:
+        total += d.get("commission_amount", 0.0)
+        cat = d.get("delivered_at")
+        if cat and (oldest is None or cat < oldest):
+            oldest = cat
+    return round(total, 2), oldest
+
+async def _enrich_seller_status(seller: dict) -> dict:
+    """Attach subscription_status + effective_paused + pending_dues."""
+    settings = await get_settings()
+    now = datetime.now(timezone.utc)
+    exp = seller.get("subscription_expires_at")
+    sub_active = False
+    if exp:
+        try:
+            expdt = datetime.fromisoformat(exp.replace("Z", "+00:00"))
+            sub_active = expdt > now
+        except Exception:
+            sub_active = False
+    days_left = 0
+    if sub_active:
+        try:
+            days_left = max(0, (datetime.fromisoformat(exp.replace("Z", "+00:00")) - now).days)
+        except Exception:
+            days_left = 0
+    seller["subscription_status"] = "active" if sub_active else ("expired" if exp else "due")
+    seller["subscription_days_left"] = days_left
+
+    total_dues, oldest = await _seller_pending_dues(seller["id"])
+    seller["pending_dues"] = total_dues
+    over_threshold = total_dues >= settings["dues_threshold"]
+    over_grace = False
+    if oldest and total_dues > 0:
+        try:
+            oldest_dt = datetime.fromisoformat(oldest.replace("Z", "+00:00"))
+            over_grace = (now - oldest_dt).days > settings["dues_grace_days"]
+        except Exception:
+            pass
+    auto_paused = over_threshold and over_grace
+    seller["auto_paused"] = auto_paused
+    seller["dues_over_threshold"] = over_threshold
+    seller["effective_paused"] = bool(seller.get("paused_by_admin")) or auto_paused
+    seller["is_active"] = sub_active and not seller["effective_paused"]
+    return seller
+
+async def _active_seller_ids() -> list:
+    sellers = await db.sellers.find({}, {"_id": 0}).to_list(1000)
+    ids = []
+    for s in sellers:
+        await _enrich_seller_status(s)
+        if s["is_active"]:
+            ids.append(s["id"])
+    return ids
 
 async def _record_failed_login(email: str):
     now = datetime.now(timezone.utc)
@@ -270,6 +355,10 @@ async def list_products(
         query["$or"] = [{"title": {"$regex": q, "$options": "i"}}, {"description": {"$regex": q, "$options": "i"}}]
     if seller_id:
         query["seller_id"] = seller_id
+    else:
+        # Buyer-facing listing hides paused/expired sellers
+        active_ids = await _active_seller_ids()
+        query["seller_id"] = {"$in": active_ids}
     if material:
         query["material"] = {"$regex": material, "$options": "i"}
     if min_price is not None or max_price is not None:
@@ -348,17 +437,128 @@ async def seller_dashboard(user: dict = Depends(require_seller)):
     seller = await db.sellers.find_one({"user_id": user["id"]}, {"_id": 0})
     if not seller:
         raise HTTPException(404, "Seller profile not found")
+    await _enrich_seller_status(seller)
     products_count = await db.products.count_documents({"seller_id": seller["id"]})
     orders_count = await db.orders.count_documents({"seller_ids": seller["id"]})
+    settings = await get_settings()
+    # Real revenue from delivered orders (this seller's share)
+    revenue = 0.0
+    delivered_orders = 0
+    async for o in db.orders.find({"seller_ids": seller["id"], "status": "delivered"}, {"_id": 0}):
+        seller_items = [it for it in o.get("items", []) if it.get("seller_id") == seller["id"]]
+        revenue += sum(it.get("line_total", 0.0) for it in seller_items)
+        delivered_orders += 1
     return {
         "seller": seller,
         "stats": {
             "products": products_count,
             "orders": orders_count,
-            "revenue": seller.get("total_sales", 0) * 1000,
+            "delivered_orders": delivered_orders,
+            "revenue": round(revenue, 2),
             "rating": seller.get("rating", 0.0),
+            "pending_dues": seller["pending_dues"],
+            "subscription_status": seller["subscription_status"],
+            "subscription_days_left": seller["subscription_days_left"],
+        },
+        "settings": {
+            "subscription_price": settings["subscription_price"],
+            "commission_rate": seller.get("commission_rate", settings["default_commission_rate"]),
+            "dues_threshold": settings["dues_threshold"],
         },
     }
+
+# ------------------ SELLER PRODUCT CRUD ------------------
+class SellerProductIn(BaseModel):
+    title: str
+    category: str
+    price: float = Field(gt=0)
+    mrp: Optional[float] = None
+    stock: int = 0
+    description: Optional[str] = ""
+    material: Optional[str] = ""
+    images: List[str] = []
+    variants: List[dict] = []
+
+@api.get("/seller/products")
+async def seller_list_products(user: dict = Depends(require_seller)):
+    seller = await db.sellers.find_one({"user_id": user["id"]}, {"_id": 0})
+    if not seller:
+        raise HTTPException(404, "Seller not found")
+    return await db.products.find({"seller_id": seller["id"]}, {"_id": 0}).sort("created_at", -1).to_list(500)
+
+@api.post("/seller/products")
+async def seller_create_product(body: SellerProductIn, user: dict = Depends(require_seller)):
+    seller = await db.sellers.find_one({"user_id": user["id"]}, {"_id": 0})
+    if not seller:
+        raise HTTPException(404, "Seller not found")
+    await _enrich_seller_status(seller)
+    if seller["effective_paused"]:
+        raise HTTPException(403, "Account paused. Clear pending dues before adding products.")
+    if seller["subscription_status"] != "active":
+        raise HTTPException(403, "Renew your subscription to add products.")
+    if body.category not in {c["slug"] for c in CATEGORIES}:
+        raise HTTPException(400, "Unknown category")
+    images = [i.strip() for i in (body.images or []) if i.strip()]
+    if not images:
+        raise HTTPException(400, "At least one image URL required")
+    mrp = body.mrp if body.mrp and body.mrp > body.price else round(body.price * 1.3, 0)
+    discount = int(round((mrp - body.price) / mrp * 100)) if mrp > body.price else 0
+    doc = {
+        "id": str(uuid.uuid4()),
+        "seller_id": seller["id"],
+        "seller_verified": bool(seller.get("verified")),
+        "category": body.category,
+        "title": body.title,
+        "description": body.description or "",
+        "price": body.price,
+        "mrp": mrp,
+        "discount": discount,
+        "stock": body.stock,
+        "material": body.material or "",
+        "images": images,
+        "variants": body.variants or [],
+        "rating": 0.0,
+        "reviews_count": 0,
+        "trending": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.products.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api.patch("/seller/products/{product_id}")
+async def seller_update_product(product_id: str, body: SellerProductIn, user: dict = Depends(require_seller)):
+    seller = await db.sellers.find_one({"user_id": user["id"]}, {"_id": 0})
+    if not seller:
+        raise HTTPException(404, "Seller not found")
+    p = await db.products.find_one({"id": product_id, "seller_id": seller["id"]})
+    if not p:
+        raise HTTPException(404, "Product not found")
+    if body.category not in {c["slug"] for c in CATEGORIES}:
+        raise HTTPException(400, "Unknown category")
+    images = [i.strip() for i in (body.images or []) if i.strip()]
+    if not images:
+        raise HTTPException(400, "At least one image URL required")
+    mrp = body.mrp if body.mrp and body.mrp > body.price else round(body.price * 1.3, 0)
+    discount = int(round((mrp - body.price) / mrp * 100)) if mrp > body.price else 0
+    updates = {
+        "title": body.title, "category": body.category, "description": body.description or "",
+        "price": body.price, "mrp": mrp, "discount": discount, "stock": body.stock,
+        "material": body.material or "", "images": images, "variants": body.variants or [],
+    }
+    await db.products.update_one({"id": product_id}, {"$set": updates})
+    return await db.products.find_one({"id": product_id}, {"_id": 0})
+
+@api.delete("/seller/products/{product_id}")
+async def seller_delete_product(product_id: str, user: dict = Depends(require_seller)):
+    seller = await db.sellers.find_one({"user_id": user["id"]}, {"_id": 0})
+    if not seller:
+        raise HTTPException(404, "Seller not found")
+    res = await db.products.delete_one({"id": product_id, "seller_id": seller["id"]})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Product not found")
+    await db.reviews.delete_many({"product_id": product_id})
+    return {"ok": True}
 
 # ------------------ PROFILE & ADDRESSES ------------------
 @api.patch("/auth/me")
@@ -482,13 +682,18 @@ async def apply_coupon(body: CouponApplyIn):
     return {"code": c["code"], "discount": discount, "label": c["label"], "expires_at": c.get("expires_at")}
 
 # ------------------ ORDERS ------------------
-STATUS_FLOW = ["placed", "confirmed", "shipped", "out_for_delivery", "delivered", "cancelled"]
+STATUS_FLOW = ["placed", "confirmed", "packed", "shipped", "delivered", "cancelled"]
+SELLER_FLOW = ["placed", "confirmed", "packed", "shipped", "delivered"]
+SERVICEABLE_PINCODE = "226013"
+SERVICEABLE_AREAS = "Mubarakpur, Bhitauli & Allu"
 
 @api.post("/orders")
 async def create_order(body: OrderCreateIn, user: dict = Depends(get_current_user)):
     address = await db.addresses.find_one({"id": body.address_id, "user_id": user["id"]}, {"_id": 0})
     if not address:
         raise HTTPException(400, "Delivery address not found")
+    if str(address.get("pincode", "")).strip() != SERVICEABLE_PINCODE:
+        raise HTTPException(400, f"We currently deliver only to {SERVICEABLE_AREAS} (Pincode {SERVICEABLE_PINCODE}). Please update your address.")
 
     # snapshot items with product + seller info
     items = []
@@ -598,6 +803,10 @@ async def cancel_order(order_id: str, user: dict = Depends(get_current_user)):
         "$push": {"status_history": {"status": "cancelled", "at": datetime.now(timezone.utc).isoformat()}},
     })
     return {"ok": True, "status": "cancelled"}
+
+@api.get("/delivery/config")
+async def delivery_config():
+    return {"pincode": SERVICEABLE_PINCODE, "areas": SERVICEABLE_AREAS, "promise": "2-hour delivery"}
 
 # ------------------ SIMILAR & BOUGHT-TOGETHER ------------------
 @api.get("/products/{product_id}/similar")
@@ -746,6 +955,11 @@ async def bulk_upload_products(body: BulkUploadIn, user: dict = Depends(require_
     seller = await db.sellers.find_one({"user_id": user["id"]}, {"_id": 0})
     if not seller:
         raise HTTPException(404, "Seller profile not found")
+    await _enrich_seller_status(seller)
+    if seller["effective_paused"]:
+        raise HTTPException(403, "Account paused. Clear pending dues before uploading products.")
+    if seller["subscription_status"] != "active":
+        raise HTTPException(403, "Renew your subscription to upload products.")
 
     valid_cats = {c["slug"] for c in CATEGORIES}
     seller_verified = bool(seller.get("verified"))
@@ -805,21 +1019,377 @@ async def seller_orders(user: dict = Depends(require_seller)):
         o["seller_total"] = round(sum(it["line_total"] for it in o["items"]), 2)
     return orders
 
+class SellerStatusIn(BaseModel):
+    status: str
+    location_link: Optional[str] = None
+
 @api.patch("/seller/orders/{order_id}/status")
-async def seller_update_status(order_id: str, status: str, user: dict = Depends(require_seller)):
-    if status not in ("shipped", "out_for_delivery", "delivered"):
-        raise HTTPException(400, "Sellers can only mark shipped / out_for_delivery / delivered")
+async def seller_update_status(order_id: str, body: SellerStatusIn = None, status: Optional[str] = None, location_link: Optional[str] = None, user: dict = Depends(require_seller)):
+    # Accept either JSON body or query params (for backward compat)
+    if body is None:
+        body = SellerStatusIn(status=status or "", location_link=location_link)
+    if body.status not in SELLER_FLOW or body.status == "placed":
+        raise HTTPException(400, "Sellers can only advance to confirmed / packed / shipped / delivered")
     seller = await db.sellers.find_one({"user_id": user["id"]}, {"_id": 0})
     if not seller:
         raise HTTPException(404, "Seller profile not found")
+    await _enrich_seller_status(seller)
+    if seller["effective_paused"]:
+        raise HTTPException(403, "Account paused. Clear pending dues before continuing.")
     o = await db.orders.find_one({"id": order_id})
     if not o or seller["id"] not in o.get("seller_ids", []):
         raise HTTPException(404, "Order not found")
+    current = o.get("status", "placed")
+    if current == "cancelled":
+        raise HTTPException(400, "Order was cancelled")
+    try:
+        cur_idx = SELLER_FLOW.index(current)
+    except ValueError:
+        cur_idx = 0
+    new_idx = SELLER_FLOW.index(body.status)
+    if new_idx != cur_idx + 1:
+        raise HTTPException(400, f"Status must advance one step forward (current: {current}, next allowed: {SELLER_FLOW[cur_idx+1] if cur_idx+1 < len(SELLER_FLOW) else 'end'})")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    set_updates = {"status": body.status}
+    if body.status == "shipped" and body.location_link and body.location_link.strip():
+        set_updates["location_link"] = body.location_link.strip()
     await db.orders.update_one({"id": order_id}, {
-        "$set": {"status": status},
-        "$push": {"status_history": {"status": status, "at": datetime.now(timezone.utc).isoformat(), "by": seller["id"]}},
+        "$set": set_updates,
+        "$push": {"status_history": {"status": body.status, "at": now_iso, "by": seller["id"]}},
     })
-    return {"ok": True, "status": status}
+    if body.status == "delivered":
+        existing = await db.commission_dues.find_one({"order_id": order_id, "seller_id": seller["id"]})
+        if not existing:
+            settings = await get_settings()
+            rate = float(seller.get("commission_rate", settings["default_commission_rate"]))
+            seller_items = [it for it in o.get("items", []) if it.get("seller_id") == seller["id"]]
+            seller_total = round(sum(it.get("line_total", 0.0) for it in seller_items), 2)
+            commission_amount = round(seller_total * rate / 100.0, 2)
+            if commission_amount > 0:
+                await db.commission_dues.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "seller_id": seller["id"],
+                    "order_id": order_id,
+                    "short_id": o.get("short_id"),
+                    "order_value": seller_total,
+                    "commission_rate": rate,
+                    "commission_amount": commission_amount,
+                    "status": "pending",
+                    "delivered_at": now_iso,
+                    "cleared_at": None,
+                    "cleared_payment_id": None,
+                    "cleared_note": None,
+                })
+    return {"ok": True, "status": body.status, "location_link": set_updates.get("location_link")}
+
+# ------------------ SUBSCRIPTIONS ------------------
+@api.get("/seller/subscription")
+async def seller_subscription_info(user: dict = Depends(require_seller)):
+    seller = await db.sellers.find_one({"user_id": user["id"]}, {"_id": 0})
+    if not seller:
+        raise HTTPException(404, "Seller not found")
+    await _enrich_seller_status(seller)
+    settings = await get_settings()
+    return {
+        "subscription_status": seller["subscription_status"],
+        "subscription_days_left": seller["subscription_days_left"],
+        "subscription_expires_at": seller.get("subscription_expires_at"),
+        "price": settings["subscription_price"],
+        "period_days": settings["subscription_period_days"],
+    }
+
+@api.post("/seller/subscription/create")
+async def seller_subscription_create(user: dict = Depends(require_seller)):
+    seller = await db.sellers.find_one({"user_id": user["id"]}, {"_id": 0})
+    if not seller:
+        raise HTTPException(404, "Seller not found")
+    settings = await get_settings()
+    amount_paise = int(round(settings["subscription_price"] * 100))
+    if not RAZORPAY_ENABLED:
+        return {"demo_mode": True, "razorpay_order_id": f"demo_sub_{uuid.uuid4().hex[:12]}", "amount": amount_paise, "currency": "INR", "key_id": ""}
+    rzp = razorpay_client.order.create({"amount": amount_paise, "currency": "INR", "receipt": ("sub_" + seller["id"])[:40], "payment_capture": 1, "notes": {"seller_id": seller["id"], "type": "subscription"}})
+    return {"demo_mode": False, "razorpay_order_id": rzp["id"], "amount": rzp["amount"], "currency": rzp["currency"], "key_id": RAZORPAY_KEY_ID}
+
+class SubVerifyIn(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: Optional[str] = None
+    demo_mode: bool = False
+
+@api.post("/seller/subscription/verify")
+async def seller_subscription_verify(body: SubVerifyIn, user: dict = Depends(require_seller)):
+    seller = await db.sellers.find_one({"user_id": user["id"]}, {"_id": 0})
+    if not seller:
+        raise HTTPException(404, "Seller not found")
+    if not body.demo_mode and RAZORPAY_ENABLED:
+        expected = hmac.new(RAZORPAY_KEY_SECRET.encode(), f"{body.razorpay_order_id}|{body.razorpay_payment_id}".encode(), hashlib.sha256).hexdigest()
+        if not body.razorpay_signature or not hmac.compare_digest(expected, body.razorpay_signature):
+            raise HTTPException(400, "Signature verification failed")
+    settings = await get_settings()
+    now = datetime.now(timezone.utc)
+    current_exp = seller.get("subscription_expires_at")
+    base = now
+    try:
+        if current_exp:
+            exp_dt = datetime.fromisoformat(current_exp.replace("Z", "+00:00"))
+            if exp_dt > now:
+                base = exp_dt
+    except Exception:
+        pass
+    new_exp = base + timedelta(days=settings["subscription_period_days"])
+    await db.sellers.update_one({"id": seller["id"]}, {"$set": {
+        "subscription_expires_at": new_exp.isoformat(),
+        "subscription_last_paid_at": now.isoformat(),
+    }})
+    await db.subscription_payments.insert_one({
+        "id": str(uuid.uuid4()),
+        "seller_id": seller["id"],
+        "amount": settings["subscription_price"],
+        "razorpay_order_id": body.razorpay_order_id,
+        "razorpay_payment_id": body.razorpay_payment_id,
+        "demo_mode": body.demo_mode,
+        "paid_at": now.isoformat(),
+    })
+    return {"ok": True, "subscription_expires_at": new_exp.isoformat()}
+
+# ------------------ DUES (SELLER) ------------------
+@api.get("/seller/dues")
+async def seller_dues(user: dict = Depends(require_seller)):
+    seller = await db.sellers.find_one({"user_id": user["id"]}, {"_id": 0})
+    if not seller:
+        raise HTTPException(404, "Seller not found")
+    await _enrich_seller_status(seller)
+    pending = await db.commission_dues.find({"seller_id": seller["id"], "status": "pending"}, {"_id": 0}).sort("delivered_at", -1).to_list(500)
+    cleared = await db.commission_dues.find({"seller_id": seller["id"], "status": "cleared"}, {"_id": 0}).sort("cleared_at", -1).to_list(50)
+    return {
+        "seller": {
+            "id": seller["id"], "business_name": seller["business_name"],
+            "pending_dues": seller["pending_dues"],
+            "effective_paused": seller["effective_paused"],
+            "auto_paused": seller["auto_paused"],
+            "dues_over_threshold": seller["dues_over_threshold"],
+        },
+        "pending": pending, "cleared": cleared,
+    }
+
+class DuesPayCreateIn(BaseModel):
+    amount: Optional[float] = None
+
+@api.post("/seller/dues/pay/create")
+async def seller_dues_pay_create(body: DuesPayCreateIn, user: dict = Depends(require_seller)):
+    seller = await db.sellers.find_one({"user_id": user["id"]}, {"_id": 0})
+    if not seller:
+        raise HTTPException(404, "Seller not found")
+    total_pending, _ = await _seller_pending_dues(seller["id"])
+    if total_pending <= 0:
+        raise HTTPException(400, "No pending dues")
+    amount = body.amount if body.amount and 0 < body.amount <= total_pending else total_pending
+    amount_paise = int(round(amount * 100))
+    if not RAZORPAY_ENABLED:
+        return {"demo_mode": True, "razorpay_order_id": f"demo_dues_{uuid.uuid4().hex[:12]}", "amount": amount_paise, "currency": "INR", "key_id": "", "amount_rupees": amount}
+    rzp = razorpay_client.order.create({"amount": amount_paise, "currency": "INR", "receipt": f"dues_{seller['id']}"[:40], "payment_capture": 1, "notes": {"seller_id": seller["id"], "type": "dues"}})
+    return {"demo_mode": False, "razorpay_order_id": rzp["id"], "amount": rzp["amount"], "currency": rzp["currency"], "key_id": RAZORPAY_KEY_ID, "amount_rupees": amount}
+
+class DuesPayVerifyIn(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: Optional[str] = None
+    demo_mode: bool = False
+    amount: float
+
+@api.post("/seller/dues/pay/verify")
+async def seller_dues_pay_verify(body: DuesPayVerifyIn, user: dict = Depends(require_seller)):
+    seller = await db.sellers.find_one({"user_id": user["id"]}, {"_id": 0})
+    if not seller:
+        raise HTTPException(404, "Seller not found")
+    if not body.demo_mode and RAZORPAY_ENABLED:
+        expected = hmac.new(RAZORPAY_KEY_SECRET.encode(), f"{body.razorpay_order_id}|{body.razorpay_payment_id}".encode(), hashlib.sha256).hexdigest()
+        if not body.razorpay_signature or not hmac.compare_digest(expected, body.razorpay_signature):
+            raise HTTPException(400, "Signature verification failed")
+    remaining = float(body.amount)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    cleared = 0
+    cursor = db.commission_dues.find({"seller_id": seller["id"], "status": "pending"}, {"_id": 0}).sort("delivered_at", 1)
+    async for d in cursor:
+        if remaining <= 0.009:
+            break
+        if d["commission_amount"] <= remaining + 0.01:
+            await db.commission_dues.update_one({"id": d["id"]}, {"$set": {
+                "status": "cleared", "cleared_at": now_iso,
+                "cleared_payment_id": body.razorpay_payment_id, "cleared_note": "razorpay",
+            }})
+            remaining -= d["commission_amount"]
+            cleared += 1
+    await db.sellers.update_one({"id": seller["id"]}, {"$set": {"last_dues_paid_at": now_iso}})
+    remaining_dues, _ = await _seller_pending_dues(seller["id"])
+    return {"ok": True, "cleared_count": cleared, "remaining_dues": remaining_dues}
+
+# ------------------ ADMIN: SETTINGS + DUES ------------------
+class SettingsUpdate(BaseModel):
+    subscription_price: Optional[float] = None
+    subscription_period_days: Optional[int] = None
+    default_commission_rate: Optional[float] = None
+    dues_threshold: Optional[float] = None
+    dues_grace_days: Optional[int] = None
+
+@api.get("/admin/settings")
+async def admin_get_settings(user: dict = Depends(require_admin)):
+    return await get_settings()
+
+@api.patch("/admin/settings")
+async def admin_update_settings(body: SettingsUpdate, user: dict = Depends(require_admin)):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if updates:
+        await db.settings.update_one({"key": "platform"}, {"$set": updates}, upsert=True)
+    return await get_settings()
+
+@api.get("/admin/dues")
+async def admin_dues(user: dict = Depends(require_admin)):
+    settings = await get_settings()
+    sellers = await db.sellers.find({}, {"_id": 0}).to_list(500)
+    rows = []
+    for s in sellers:
+        await _enrich_seller_status(s)
+        rows.append({
+            "id": s["id"], "business_name": s["business_name"],
+            "verified": s.get("verified", False),
+            "commission_rate": s.get("commission_rate", settings["default_commission_rate"]),
+            "pending_dues": s["pending_dues"], "over_threshold": s["dues_over_threshold"],
+            "auto_paused": s["auto_paused"], "paused_by_admin": bool(s.get("paused_by_admin")),
+            "effective_paused": s["effective_paused"], "subscription_status": s["subscription_status"],
+            "subscription_expires_at": s.get("subscription_expires_at"),
+            "last_dues_paid_at": s.get("last_dues_paid_at"),
+        })
+    rows.sort(key=lambda r: (-r["pending_dues"], r["business_name"]))
+    return {"threshold": settings["dues_threshold"], "sellers": rows}
+
+class AdminMarkPaidIn(BaseModel):
+    amount: Optional[float] = None
+    note: Optional[str] = "offline"
+
+@api.post("/admin/dues/{seller_id}/mark-paid")
+async def admin_mark_paid(seller_id: str, body: AdminMarkPaidIn, user: dict = Depends(require_admin)):
+    s = await db.sellers.find_one({"id": seller_id})
+    if not s:
+        raise HTTPException(404, "Seller not found")
+    total_pending, _ = await _seller_pending_dues(seller_id)
+    if total_pending <= 0:
+        raise HTTPException(400, "No pending dues")
+    remaining = float(body.amount) if body.amount and 0 < body.amount <= total_pending else total_pending
+    now_iso = datetime.now(timezone.utc).isoformat()
+    cleared = 0
+    cursor = db.commission_dues.find({"seller_id": seller_id, "status": "pending"}, {"_id": 0}).sort("delivered_at", 1)
+    async for d in cursor:
+        if remaining <= 0.009:
+            break
+        if d["commission_amount"] <= remaining + 0.01:
+            await db.commission_dues.update_one({"id": d["id"]}, {"$set": {
+                "status": "cleared", "cleared_at": now_iso,
+                "cleared_payment_id": None, "cleared_note": body.note or "offline",
+            }})
+            remaining -= d["commission_amount"]
+            cleared += 1
+    await db.sellers.update_one({"id": seller_id}, {"$set": {"last_dues_paid_at": now_iso}})
+    remaining_dues, _ = await _seller_pending_dues(seller_id)
+    return {"ok": True, "cleared_count": cleared, "remaining_dues": remaining_dues}
+
+class AdminSellerPauseIn(BaseModel):
+    paused: bool
+
+@api.patch("/admin/sellers/{seller_id}/pause")
+async def admin_pause_seller(seller_id: str, body: AdminSellerPauseIn, user: dict = Depends(require_admin)):
+    s = await db.sellers.find_one({"id": seller_id})
+    if not s:
+        raise HTTPException(404, "Seller not found")
+    await db.sellers.update_one({"id": seller_id}, {"$set": {"paused_by_admin": body.paused}})
+    return {"ok": True, "paused_by_admin": body.paused}
+
+class AdminSellerCommissionIn(BaseModel):
+    commission_rate: float = Field(ge=0, le=100)
+
+@api.patch("/admin/sellers/{seller_id}/commission")
+async def admin_set_commission(seller_id: str, body: AdminSellerCommissionIn, user: dict = Depends(require_admin)):
+    s = await db.sellers.find_one({"id": seller_id})
+    if not s:
+        raise HTTPException(404, "Seller not found")
+    await db.sellers.update_one({"id": seller_id}, {"$set": {"commission_rate": body.commission_rate}})
+    return {"ok": True, "commission_rate": body.commission_rate}
+
+# ------------------ ADMIN ------------------
+@api.get("/admin/stats")
+async def admin_stats(user: dict = Depends(require_admin)):
+    return {
+        "sellers": await db.sellers.count_documents({}),
+        "sellers_verified": await db.sellers.count_documents({"verified": True}),
+        "sellers_pending": await db.sellers.count_documents({"verified": {"$ne": True}}),
+        "products": await db.products.count_documents({}),
+        "orders": await db.orders.count_documents({}),
+        "buyers": await db.users.count_documents({"role": "buyer"}),
+        "revenue": round(sum([o["total"] async for o in db.orders.find({"payment_status": "paid"}, {"total": 1})]), 2),
+    }
+
+@api.get("/admin/sellers")
+async def admin_list_sellers(user: dict = Depends(require_admin)):
+    sellers = await db.sellers.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    for s in sellers:
+        s["products_count"] = await db.products.count_documents({"seller_id": s["id"]})
+        s["orders_count"] = await db.orders.count_documents({"seller_ids": s["id"]})
+        u = await db.users.find_one({"id": s["user_id"]}, {"_id": 0, "password_hash": 0})
+        s["owner_email"] = (u or {}).get("email")
+        s["owner_name"] = (u or {}).get("name")
+    return sellers
+
+@api.patch("/admin/sellers/{seller_id}/verify")
+async def admin_verify_seller(seller_id: str, verified: bool = True, user: dict = Depends(require_admin)):
+    s = await db.sellers.find_one({"id": seller_id})
+    if not s:
+        raise HTTPException(404, "Seller not found")
+    await db.sellers.update_one({"id": seller_id}, {"$set": {"verified": verified, "verified_at": datetime.now(timezone.utc).isoformat()}})
+    await db.products.update_many({"seller_id": seller_id}, {"$set": {"seller_verified": verified}})
+    return {"ok": True, "verified": verified}
+
+@api.delete("/admin/sellers/{seller_id}")
+async def admin_delete_seller(seller_id: str, user: dict = Depends(require_admin)):
+    s = await db.sellers.find_one({"id": seller_id})
+    if not s:
+        raise HTTPException(404, "Seller not found")
+    products_removed = (await db.products.delete_many({"seller_id": seller_id})).deleted_count
+    await db.sellers.delete_one({"id": seller_id})
+    await db.users.delete_one({"id": s.get("user_id")})
+    return {"ok": True, "products_removed": products_removed}
+
+@api.get("/admin/products")
+async def admin_list_products(q: Optional[str] = None, category: Optional[str] = None, seller_id: Optional[str] = None, user: dict = Depends(require_admin)):
+    query = {}
+    if q:
+        query["title"] = {"$regex": q, "$options": "i"}
+    if category:
+        query["category"] = category
+    if seller_id:
+        query["seller_id"] = seller_id
+    products = await db.products.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    sellers = {s["id"]: s async for s in db.sellers.find({}, {"_id": 0})}
+    for p in products:
+        s = sellers.get(p.get("seller_id"))
+        p["seller_name"] = (s or {}).get("business_name")
+        p["seller_verified_flag"] = (s or {}).get("verified", False)
+    return products
+
+@api.delete("/admin/products/{product_id}")
+async def admin_delete_product(product_id: str, user: dict = Depends(require_admin)):
+    res = await db.products.delete_one({"id": product_id})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Product not found")
+    await db.reviews.delete_many({"product_id": product_id})
+    return {"ok": True}
+
+@api.get("/admin/orders")
+async def admin_list_orders(status: Optional[str] = None, user: dict = Depends(require_admin)):
+    query = {}
+    if status and status != "all":
+        query["status"] = status
+    orders = await db.orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return orders
 
 # ------------------ SEED ------------------
 SEED_SELLERS = [
@@ -970,10 +1540,18 @@ async def startup():
     await db.orders.create_index("seller_ids")
     await db.addresses.create_index("user_id")
     await db.coupons.create_index("code", unique=True)
+    await db.commission_dues.create_index("seller_id")
+    await db.commission_dues.create_index([("seller_id", 1), ("status", 1)])
+    # ensure default settings
+    await get_settings()
     # seed coupons if missing
     for c in DEFAULT_COUPONS:
         await db.coupons.update_one({"code": c["code"]}, {"$setOnInsert": c}, upsert=True)
     await seed_data()
+    # give existing sellers an active subscription so they don't auto-hide on first boot
+    now = datetime.now(timezone.utc)
+    default_exp = (now + timedelta(days=30)).isoformat()
+    await db.sellers.update_many({"subscription_expires_at": {"$exists": False}}, {"$set": {"subscription_expires_at": default_exp}})
     # denormalise seller.verified onto products for card display
     sellers_all = await db.sellers.find({}, {"_id": 0}).to_list(500)
     verified_ids = [s["id"] for s in sellers_all if s.get("verified")]

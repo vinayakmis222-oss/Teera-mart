@@ -62,7 +62,7 @@ def products():
 @pytest.fixture(scope="session")
 def buyer_address(buyer):
     r = requests.post(f"{API}/addresses", headers=buyer["headers"], json={
-        "name": "TEST Buyer", "phone": "9876543210", "pincode": "560001",
+        "name": "TEST Buyer", "phone": "9876543210", "pincode": "226013",
         "line1": "1 Test Street", "city": "Bengaluru", "state": "Karnataka", "type": "home"})
     assert r.status_code in (200, 201), r.text
     body = r.json()
@@ -258,8 +258,10 @@ class TestCancel:
         s_prods = [p for p in sellers if p["seller_id"] == seller_id]
         assert s_prods, "no products for seller1"
         order = make_order(buyer, buyer_address, s_prods, payment_method="cod", count=1)
-        up = requests.patch(f"{API}/seller/orders/{order['id']}/status?status=shipped", headers=seller_headers)
-        assert up.status_code == 200, up.text
+        # forward-only flow: placed -> confirmed -> packed -> shipped
+        for st in ("confirmed", "packed", "shipped"):
+            up = requests.patch(f"{API}/seller/orders/{order['id']}/status?status={st}", headers=seller_headers)
+            assert up.status_code == 200, up.text
         c = requests.post(f"{API}/orders/{order['id']}/cancel", headers=buyer["headers"])
         assert c.status_code == 400, c.text
 
@@ -357,7 +359,7 @@ class TestSellerOrders:
         seller_id = me.get("id") or me.get("seller", {}).get("id")
         s_prods = [p for p in products if p["seller_id"] == seller_id]
         order = make_order(buyer, buyer_address, s_prods, payment_method="cod", count=1)
-        for st in ("shipped", "out_for_delivery", "delivered"):
+        for st in ("confirmed", "packed", "shipped", "delivered"):
             r = requests.patch(f"{API}/seller/orders/{order['id']}/status?status={st}", headers=seller_headers)
             assert r.status_code == 200, r.text
             assert r.json()["status"] == st
@@ -366,7 +368,7 @@ class TestSellerOrders:
 
     def test_seller_invalid_status_rejected(self, seller_headers, buyer, buyer_address, products):
         order = make_order(buyer, buyer_address, products, payment_method="cod", count=1)
-        for st in ("cancelled", "confirmed", "placed", "bogus"):
+        for st in ("cancelled", "placed", "bogus", "out_for_delivery"):
             r = requests.patch(f"{API}/seller/orders/{order['id']}/status?status={st}", headers=seller_headers)
             assert r.status_code == 400, f"{st} -> {r.status_code}"
 

@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, inr } from "../lib/api";
 import { useCart } from "../context/CartContext";
-import { Plus, ShoppingCart, Star } from "lucide-react";
+import { Plus, ShoppingCart } from "lucide-react";
 import { toast } from "sonner";
+import ProductCard from "./ProductCard";
 
 export function SimilarProducts({ productId }) {
   const [items, setItems] = useState(null);
@@ -22,18 +23,7 @@ export function SimilarProducts({ productId }) {
       </div>
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
         {items.slice(0, 4).map((p) => (
-          <Link key={p.id} to={`/product/${p.id}`} data-testid={`similar-card-${p.id}`} className="group bg-white border border-border hover:shadow-cardHover transition-all">
-            <div className="aspect-square bg-off-white-alt overflow-hidden">
-              <img src={p.images?.[0]} loading="lazy" alt={p.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-            </div>
-            <div className="p-3">
-              <div className="text-sm text-charcoal line-clamp-1 font-medium">{p.title}</div>
-              <div className="flex items-center gap-2 mt-1">
-                <span className="badge-rating text-[10px]"><Star className="w-2.5 h-2.5 fill-current" /> {p.rating}</span>
-                <span className="font-bold text-charcoal">{inr(p.price)}</span>
-              </div>
-            </div>
-          </Link>
+          <ProductCard key={p.id} p={p} />
         ))}
       </div>
     </section>
@@ -77,8 +67,11 @@ export function BoughtTogether({ productId }) {
             <div key={p.id} className="flex items-center gap-3 md:gap-4">
               {i > 0 && <Plus className="w-4 h-4 text-charcoal-muted shrink-0" />}
               <label className={`shrink-0 w-32 md:w-40 border-2 p-2 cursor-pointer transition-colors ${selected[p.id] ? "border-terracotta bg-terracotta/5" : "border-border bg-white"}`} data-testid={`bt-card-${p.id}`}>
-                <div className="aspect-square bg-off-white-alt overflow-hidden mb-2">
+                <div className="relative aspect-square bg-off-white-alt overflow-hidden mb-2">
                   <img src={p.images?.[0]} loading="lazy" alt="" className="w-full h-full object-cover" />
+                  <div className="absolute bottom-1 left-1 bg-charcoal text-off-white text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5" data-testid="two-hour-badge">
+                    2-Hour Delivery
+                  </div>
                 </div>
                 <div className="text-xs text-charcoal line-clamp-2 min-h-[2rem]">{p.title}</div>
                 <div className="flex items-center justify-between mt-1">

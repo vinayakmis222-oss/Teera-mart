@@ -1,0 +1,55 @@
+{
+  "summary": "Phase-5 Admin Panel end-to-end verification (backend + frontend). Backend: new /app/backend/tests/test_phase5_admin.py (34 tests) covering RBAC (401 unauth / 403 buyer / 403 seller on all 4 admin GETs + 3 mutating routes), stats shape, sellers list enrichment, verify toggle propagation to products, cascade seller delete (products + linked user + 404 on re-delete), admin products list/search/category filters, product delete + review cascade path, orders list/status filters, plus auth-playbook checks (bcrypt $2b$, httpOnly cookies, 5-fail lockout -> 423, CORS config). Full backend regression suite: 97/97 passed. Frontend: admin login (wrong password, seller-account rejection, success), dashboard (6 stat tiles, sidebar, 3 tiles routing), sellers page (all/verified/pending filters, search by name/email/GST + empty state, approve->Verified, revoke->Pending, delete with window.confirm + 'Removed seller (2 products deleted)' toast), products page (Seller column, native category filter, Enter search, delete row), orders page (158 rows across multiple buyers, placed/confirmed/delivered/cancelled filters all correct), guards (unauth /admin -> /admin/login; buyer and seller -> /; no header-admin-link for buyer/seller; header-admin-link visible for admin), admin logout clears session. No blocking defects found in Phase 5.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/auth/login", "issue": "Grammar in error copy surfaced in UI: 'This account is not a admin account' (should be 'an admin')."},
+      {"endpoint": "seed_data()", "issue": "seed_admin only INSERTS the admin when missing; it never updates name/password_hash if ADMIN_PASSWORD/ADMIN_EMAIL changes, so a rotated admin password is silently ignored (playbook expects idempotent upsert)."},
+      {"endpoint": "DELETE /api/admin/sellers/{id}", "issue": "Cascade deletes products + user but leaves orphan documents: reviews of the deleted products and the seller_id references inside existing orders/order items are not cleaned or flagged."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AdminLayout admin-stats", "issue": "Stat tiles are fetched once on mount and never refreshed after mutations, so after approving/removing a seller or deleting a product the tiles show stale counts (e.g. Products still 25 right after a delete). Refetch /admin/stats after mutations or lift stats into a shared refresh.", "selector": "[data-testid=\"admin-stats\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/seller/login (pre-existing, not Phase 5)", "issues": ["H1 'Reach India's most design-conscious buyers.' is invisible: global rule `h1,h2,h3,h4,h5 { color:#2B2B2B }` in index.css beats the inherited `text-off-white` on the dark hero. Add an explicit text colour class to that h1 (or scope the global rule)."]},
+      {"screen": "/admin/products", "issues": ["Category filter is a native <select> while the rest of the app uses shadcn components - same consistency note raised in iteration 5 for the sort dropdown."]},
+      {"screen": "/admin (dashboard)", "issues": ["Stats show Sellers/Verified but no 'Pending' tile even though /admin/stats returns sellers_pending - pending approvals are the main admin action and are not surfaced on the dashboard."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase5_admin.py",
+    "/app/backend/tests/_util_make_test_seller.py",
+    "/app/backend/tests/_util_cleanup_test_sellers.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Refresh /admin/stats after seller verify/delete and product delete so the tiles are not stale (or expose a refreshStats from AdminLayout via Outlet context).",
+    "Fix login error grammar: 'not a admin account' -> 'not an admin account'.",
+    "Make seed_data() upsert the admin (update password_hash/name when ADMIN_EMAIL/ADMIN_PASSWORD change) instead of insert-only.",
+    "On seller delete, also delete reviews belonging to the removed products (currently orphaned).",
+    "Give the /seller/login hero H1 an explicit light text colour - it is currently charcoal-on-charcoal and unreadable.",
+    "Optional: add a 'Pending approvals' stat tile linking to /admin/sellers?filter=pending."
+  ],
+  "critical_code_review_comments": [
+    "require_admin/RBAC is correct and consistently applied to every /api/admin/* route (verified 401/403/200 for all 4 GETs and the 3 mutating routes).",
+    "GET /api/admin/sellers does N+1 queries (2 counts + 1 user lookup per seller) and /admin/products re-reads the whole sellers collection per request; fine at seed scale but should move to $lookup/aggregation before growth.",
+    "All admin endpoints correctly project out MongoDB _id; no ObjectId leakage observed.",
+    "Destructive admin actions rely on window.confirm; consider the shadcn AlertDialog for consistency and testability (Playwright must register a dialog handler).",
+    "PATCH /admin/sellers/{id}/verify takes `verified` as a query param rather than a Pydantic body model - works but is inconsistent with the rest of the API's validated request bodies."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase5_admin.py",
+    "/app/backend/tests/_util_make_test_seller.py",
+    "/app/backend/tests/_util_cleanup_test_sellers.py"
+  ],
+  "success_rate": {"backend": "100% (34/34 phase-5; 97/97 full suite)", "frontend": "100% of Phase-5 flows passed (no blocking issues)"},
+  "seed_data_creation": "Created and then deleted throwaway TEST_ sellers with TEST_ products for cascade-delete tests; also created disposable TEST_ buyers for RBAC/lockout. Removed leftover test sellers from earlier iterations ('TEST_UIDelete Traders', 'UI Biz') via _util_cleanup_test_sellers.py - admin sellers list is back to the 5 seed sellers with Rustic Home Co. still unverified.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@terramart.com / Admin@123 (admin); seller1..5@terramart.com / Seller@123 (sellers must log in at /seller/login - /login sends role=buyer and correctly 403s a seller account)",
+  "context_for_next_testing_agent": "Phase 5 admin panel is functionally green. Gotchas learned: (1) inner_text() returns CSS-uppercased text, so assert on 'VERIFIED'/'PENDING', not 'Verified'/'Pending'; (2) both seller and product delete use window.confirm - register page.on('dialog', accept) BEFORE clicking; (3) sellers page search/filter is client-side, products page search needs Enter (form submit) while the category select refetches on change; (4) admin stats do not refresh after mutations; (5) the public edge proxy rewrites CORS headers to ACAO:* on both preflight and actual requests, so app CORS must be asserted from source/localhost, not the public URL; (6) use /app/backend/tests/_util_make_test_seller.py to mint a disposable unverified seller with 2 products for UI delete tests, and _util_cleanup_test_sellers.py afterwards.",
+  "rca_of_the_issue": "Stale admin stats RCA: AdminLayout fetches /admin/stats in a useEffect keyed on `user` only, and child pages mutate data without notifying the layout, so counts only update on remount/route change. No other root causes required - all Phase-5 endpoints returned 200 with correct payloads and all denormalised seller_verified flags propagated correctly on verify/revoke."
+}

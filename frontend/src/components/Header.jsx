@@ -1,5 +1,5 @@
 import { Link, useNavigate } from "react-router-dom";
-import { Search, ShoppingCart, User, Store, LogOut, Package } from "lucide-react";
+import { Search, ShoppingCart, User, Store, LogOut, Package, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useCart } from "../context/CartContext";
@@ -74,6 +74,11 @@ export default function Header() {
                 {user.role === "seller" && (
                   <Link data-testid="header-seller-dashboard-link" to="/seller/dashboard" className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-off-white text-charcoal">
                     <Store className="w-4 h-4" /> Seller Dashboard
+                  </Link>
+                )}
+                {user.role === "admin" && (
+                  <Link data-testid="header-admin-link" to="/admin" className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-off-white text-terracotta font-semibold">
+                    <ShieldCheck className="w-4 h-4" /> Admin Console
                   </Link>
                 )}
                 <button

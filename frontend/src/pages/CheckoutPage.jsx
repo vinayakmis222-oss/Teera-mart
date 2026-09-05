@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { useNavigate, Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useCart } from "../context/CartContext";
+import { useDelivery, SERVICEABLE_PINCODE, SERVICEABLE_AREAS } from "../context/DeliveryContext";
 import { api, inr } from "../lib/api";
-import { MapPin, CreditCard, Wallet, Landmark, Truck, Plus, Check, ChevronRight, Home, Briefcase } from "lucide-react";
+import { MapPin, CreditCard, Wallet, Landmark, Truck, Plus, Check, ChevronRight, Home, Briefcase, XCircle } from "lucide-react";
 import { toast } from "sonner";
 
 const STEPS = ["Address", "Payment", "Review"];
@@ -11,6 +12,7 @@ const STEPS = ["Address", "Payment", "Review"];
 export default function CheckoutPage() {
   const { user, loading } = useAuth();
   const { items, subtotal, clear } = useCart();
+  const { isServiceable, pincode: deliveryPin } = useDelivery();
   const nav = useNavigate();
   const [step, setStep] = useState(0);
   const [addresses, setAddresses] = useState([]);
@@ -35,6 +37,23 @@ export default function CheckoutPage() {
 
   if (loading || user === null) return <div className="container-x py-16 text-charcoal-muted">Loading…</div>;
   if (!user) return <Navigate to="/login?redirect=/checkout" replace />;
+
+  if (!isServiceable) {
+    return (
+      <div className="container-x py-16 max-w-lg" data-testid="checkout-blocked">
+        <div className="bg-white border border-destructive/40 p-6 md:p-8 text-center">
+          <XCircle className="w-10 h-10 text-destructive mx-auto mb-3" />
+          <h1 className="font-heading font-bold text-2xl text-charcoal mb-2">Not serviceable</h1>
+          <p className="text-sm text-charcoal-muted mb-4">
+            Currently we deliver only in {SERVICEABLE_AREAS} (Pincode {SERVICEABLE_PINCODE}).
+            {deliveryPin && <> Your pincode <span className="font-medium">{deliveryPin}</span> is outside this zone.</>}
+          </p>
+          <button onClick={() => nav(-1)} className="btn-terracotta">Go back &amp; verify pincode</button>
+        </div>
+      </div>
+    );
+  }
+
   if (items.length === 0 && !placed && !placing) return <Navigate to="/cart" replace />;
 
   const place = async () => {
@@ -246,10 +265,15 @@ function StepAddress({ addresses, addressId, setAddressId, showAdd, setShowAdd, 
 }
 
 function AddressForm({ onClose, onSaved, existing }) {
-  const [f, setF] = useState(existing || { name: "", phone: "", pincode: "", line1: "", line2: "", city: "", state: "", type: "home", is_default: false });
+  const [f, setF] = useState(existing || { name: "", phone: "", pincode: SERVICEABLE_PINCODE, line1: "", line2: "", city: "Lucknow", state: "Uttar Pradesh", type: "home", is_default: false });
   const [busy, setBusy] = useState(false);
+  const pinBad = f.pincode && f.pincode !== SERVICEABLE_PINCODE;
   const submit = async (e) => {
     e.preventDefault();
+    if (f.pincode !== SERVICEABLE_PINCODE) {
+      toast.error(`We deliver only to Pincode ${SERVICEABLE_PINCODE} (${SERVICEABLE_AREAS})`);
+      return;
+    }
     setBusy(true);
     try {
       if (existing) await api.patch(`/addresses/${existing.id}`, f);
@@ -271,7 +295,21 @@ function AddressForm({ onClose, onSaved, existing }) {
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <input data-testid="addr-city" required placeholder="City" value={f.city} onChange={(e) => setF({ ...f, city: e.target.value })} className="border-2 border-border focus:border-terracotta bg-white px-3 py-2 outline-none" />
         <input data-testid="addr-state" required placeholder="State" value={f.state} onChange={(e) => setF({ ...f, state: e.target.value })} className="border-2 border-border focus:border-terracotta bg-white px-3 py-2 outline-none" />
-        <input data-testid="addr-pincode" required placeholder="Pincode" value={f.pincode} onChange={(e) => setF({ ...f, pincode: e.target.value })} className="border-2 border-border focus:border-terracotta bg-white px-3 py-2 outline-none" />
+        <div>
+          <input
+            data-testid="addr-pincode"
+            required
+            placeholder="Pincode"
+            value={f.pincode}
+            onChange={(e) => setF({ ...f, pincode: e.target.value.replace(/\D/g, "").slice(0, 6) })}
+            className={`w-full border-2 focus:border-terracotta bg-white px-3 py-2 outline-none ${pinBad ? "border-destructive" : "border-border"}`}
+          />
+          {pinBad && (
+            <div className="text-[11px] text-destructive mt-1" data-testid="addr-pincode-error">
+              We deliver only to {SERVICEABLE_PINCODE} ({SERVICEABLE_AREAS})
+            </div>
+          )}
+        </div>
       </div>
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex gap-2">
@@ -286,7 +324,7 @@ function AddressForm({ onClose, onSaved, existing }) {
       </div>
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-charcoal-muted hover:text-charcoal">Cancel</button>
-        <button type="submit" disabled={busy} className="btn-terracotta text-sm py-2 px-4" data-testid="addr-save">{busy ? "Saving…" : "Save address"}</button>
+        <button type="submit" disabled={busy || pinBad} className="btn-terracotta text-sm py-2 px-4" data-testid="addr-save">{busy ? "Saving…" : "Save address"}</button>
       </div>
     </form>
   );

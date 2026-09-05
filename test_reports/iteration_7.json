@@ -1,0 +1,66 @@
+{
+  "summary": "Phase 6 (seller subscription + commission dues) end-to-end verification. Backend: added /app/backend/tests/test_phase6_subscription_dues.py (15 tests: admin settings GET/PATCH+RBAC, subscription info/create/verify demo flow, commission auto-book on 'delivered' with idempotency, partial + full dues pay, admin dues list/sort/shape, mark-paid, per-seller commission rate incl. 422 on >100, admin pause blocking status updates + bulk upload + hiding products from buyer listing, 404s) and /app/backend/tests/test_phase6_enforcement.py (2 tests: expired subscription hides products & blocks bulk upload then renewal restores; auto-pause when dues >= threshold beyond grace, using a back-dated due row). All 17 Phase-6 tests pass. Frontend (Playwright, public URL): seller dashboard subscription/dues cards + links, /seller/subscription demo renew (days-left 119 -> 149, toast 'Demo payment ... subscription extended'), /seller/dues partial demo pay (359.6 -> 179.8, cleared list updated), paused-banner when admin-paused, /admin/dues settings editor (all 5 inputs, save + persistence after reload), dues table sort/rows, mark-paid (native prompt) clears full dues, toggle-pause pauses/unpauses and buyer homepage product cards for seller1 disappear (16 -> 14, 'TerraStone' text gone) and return on unpause, admin-nav-dues link present. One HIGH regression found: newly registered sellers get no subscription window so onboarding (bulk upload) is blocked with 403 — documented in test_phase6_new_seller_onboarding.py (2 intentionally failing tests) and it also breaks 2 pre-existing Phase-5 tests.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/auth/register (seller) + POST /api/seller/products/bulk", "issue": "Registration never sets subscription_expires_at, so a brand-new seller has subscription_status='due' and every bulk upload returns 403 'Renew your subscription to upload products.'; their products would also be hidden from buyer listings. The 30-day window is only backfilled in the startup hook (server.py:1428) for sellers that already exist, so a new signup can only be fixed by a backend restart or a paid subscription. This also broke 2 previously passing Phase-5 tests (test_delete_seller_cascades, test_delete_product). Fix: set subscription_expires_at = now + settings.subscription_period_days (trial) at seller registration.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "GET /api/products (buyer listing)", "issue": "_active_seller_ids() loads every seller and calls _enrich_seller_status() (which re-reads settings + aggregates commission_dues per seller) on EVERY unfiltered product request — N+1 DB round-trips per listing hit. Cache settings/active ids or compute pending dues with a single $group aggregation."},
+      {"endpoint": "POST /api/seller/dues/pay/verify, POST /api/admin/dues/{id}/mark-paid", "issue": "Payment clearing is all-or-nothing per due row: a due larger than the paid amount is skipped entirely (no partial allocation / no credit stored), so paying e.g. 100 against a single 180 due clears nothing yet returns ok:true with cleared_count 0 and the money is unaccounted. Also amounts <=0 or > total silently fall back to 'pay everything'."},
+      {"endpoint": "POST /api/seller/dues/pay/verify", "issue": "Amount is taken from the client body and never cross-checked against the razorpay order created in /pay/create (demo or live), so a seller could POST demo_mode:true with an arbitrary amount and clear real dues. Recommend persisting the created order (id -> amount) and validating on verify."},
+      {"endpoint": "PATCH /api/admin/settings", "issue": "No bounds validation: negative subscription_price / dues_threshold / grace days or commission_rate > 100 are accepted (e.g. dues_grace_days=-1 instantly auto-pauses every seller with dues). Add Field(ge=0) constraints."},
+      {"endpoint": "PATCH /api/seller/orders/{id}/status", "issue": "status is a query param (not a validated Pydantic body) — inconsistent with the rest of the API; commission booking also has no unique index on (order_id, seller_id), it relies on a read-then-insert check that can double-book under concurrent 'delivered' calls."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AdminDuesPage.markPaid", "issue": "Uses native window.prompt() for the mark-paid amount (blocked/auto-dismissed by automation and inconsistent with the shadcn dialogs used elsewhere). Functionally correct once the prompt is accepted, but should be a modal with a data-testid input.", "selector": "[data-testid^=\"mark-paid-\"]", "priority": "MEDIUM"},
+      {"component": "SellerSubscriptionPage", "issue": "'days left' has no data-testid (review asked to assert days-left); only reachable via free text inside subscription-page. Add data-testid=\"days-left\".", "selector": "[data-testid=\"subscription-page\"]", "priority": "LOW"},
+      {"component": "SellerBulkUploadPage", "issue": "A paused/expired seller can still open /seller/bulk-upload and fill the whole CSV form; the block only surfaces as a 403 on submit. Show the paused banner / disable the uploader upfront.", "selector": "/seller/bulk-upload", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/seller/dues", "issues": ["Rounding inconsistency: the table shows commission as ₹180 while the sidebar total shows '₹ 179.8' and the CTA reads 'Pay ₹360' for a 359.6 total — use one formatting rule (2 decimals or rounded) across row, total and button.", "paused-banner copy is dues-specific ('until pending commission dues are paid') and is shown even when dues are ₹0 and the pause was admin-initiated — misleading; branch the copy on auto_paused vs paused_by_admin."]},
+      {"screen": "/admin/dues", "issues": ["'Mark paid' buttons on rows with ₹0 dues look disabled (very low-contrast grey on white) but are still clickable and produce a 400 'No pending dues'; disable them properly when pending_dues === 0.", "Admin stat tiles (Sellers/Products/Orders) remain stale after dues/pause mutations — same pre-existing issue reported in iteration 6."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase6_subscription_dues.py",
+    "/app/backend/tests/test_phase6_enforcement.py",
+    "/app/backend/tests/test_phase6_new_seller_onboarding.py",
+    "/app/backend/tests/_util_book_due.py",
+    "/app/backend/tests/_util_reset_subscriptions.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "HIGH: grant an initial subscription window (trial) at seller registration — set subscription_expires_at = now + settings.subscription_period_days in /api/auth/register (and/or in seller profile creation) so new sellers can bulk-upload and be listed. This currently blocks the whole new-seller onboarding path and fails 2 Phase-5 regression tests.",
+    "Validate paid amount against the created razorpay/demo order in /seller/dues/pay/verify instead of trusting body.amount.",
+    "Support partial allocation (or reject with 400) when the paid amount is smaller than the smallest pending due — today it returns ok with cleared_count 0 and loses the payment.",
+    "Add Field(ge=0)/le=100 bounds to SettingsUpdate; negative dues_grace_days instantly auto-pauses sellers.",
+    "Replace window.prompt in AdminDuesPage mark-paid with a shadcn dialog + data-testid input; disable 'Mark paid' when pending_dues === 0.",
+    "Add data-testid=\"days-left\" on SellerSubscriptionPage; unify ₹ rounding on /seller/dues; branch paused-banner copy for admin pause vs dues auto-pause.",
+    "Cache/aggregate _active_seller_ids() — currently O(sellers) enrichment queries on every buyer product listing request.",
+    "Add a unique index on commission_dues (order_id, seller_id) to make the delivered booking race-proof."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 1456 lines and now mixes auth, catalog, orders, payments, subscriptions, dues and admin — split into routers before the next phase.",
+    "Commission booking correctly skips zero-value commissions and is idempotent for sequential calls, but the guard is a read-then-insert (no unique index) — concurrent 'delivered' PATCHes can double-book.",
+    "_enrich_seller_status() is called per-seller inside loops in /admin/dues and _active_seller_ids(), each time re-fetching settings; hoist settings out of the loop.",
+    "All Phase-6 responses correctly project out MongoDB _id (verified on /admin/settings, /admin/dues, /seller/dues).",
+    "RBAC verified: 401 unauth, 403 buyer/seller on /admin/settings and /admin/dues; 403 buyer on /seller/subscription."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase6_subscription_dues.py",
+    "/app/backend/tests/test_phase6_enforcement.py",
+    "/app/backend/tests/test_phase6_new_seller_onboarding.py",
+    "/app/backend/tests/_util_book_due.py",
+    "/app/backend/tests/_util_reset_subscriptions.py"
+  ],
+  "success_rate": {"backend": "100% of Phase-6 endpoints (17/17 new tests); full suite 112/116 — 4 failures all caused by the single new-seller-subscription bug", "frontend": "100% of Phase-6 UI flows passed (mark-paid only via native prompt)"},
+  "seed_data_creation": "Created throwaway TEST_ buyers + addresses, placed COD orders on seller1 products and marked them delivered to book commission dues; all dues were then cleared (pending = 0). Leftover TEST_ sellers from the failing Phase-5 tests were removed with _util_cleanup_test_sellers.py, and all 5 seed sellers' subscription_expires_at was reset to now+30d via _util_reset_subscriptions.py. Platform settings restored to defaults (1/30/10/5000/15); no seller is paused. Note: seller1 order count/status history now includes extra delivered TEST orders (not removable via API).",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "admin@terramart.com / Admin@123; seller1@terramart.com / Seller@123 (login at /seller/login); buyers created ad-hoc via /api/auth/register",
+  "context_for_next_testing_agent": "Gotchas: (1) page.fill() + immediate submit races the React login form on this app — use locator.click() + type(delay) then get_by_role('button', name='Sign in'); (2) AdminDuesPage mark-paid uses window.prompt — register page.on('dialog', d.accept('')) BEFORE clicking, blank = clear full; (3) pytest.ini runs -n 2 --dist loadscope: Phase-6 classes mutate shared seller1 state (pause/dues) so cross-class parallelism causes false 403 failures — run test_phase6_* with -n 0; (4) use _util_book_due.py to create a fresh pending due for seller1 and _util_reset_subscriptions.py to restore seed subscriptions; (5) to force auto-pause you need a back-dated delivered_at (grace check is (now-oldest).days > grace_days, so setting grace_days=0 alone does NOT trigger it — test_phase6_enforcement.py inserts a 60-day-old 10000 due instead); (6) after fixing new-seller subscriptions, re-run test_phase6_new_seller_onboarding.py and the 2 Phase-5 tests (test_delete_seller_cascades, test_delete_product).",
+  "rca_of_the_issue": "New-seller onboarding block: register() (server.py:171-181) inserts the seller doc without subscription_expires_at; _enrich_seller_status() then reports subscription_status='due' (exp falsy) and is_active=False, so bulk_upload_products() raises 403 'Renew your subscription' and list_products() omits the seller from _active_seller_ids(). The only place a 30-day window is granted is the startup hook update_many({subscription_expires_at: {$exists: false}}) at server.py:1428, which runs before the new seller exists. Reproduce: POST /api/auth/register role=seller -> GET /api/seller/subscription => 'due' -> POST /api/seller/products/bulk => 403."
+}

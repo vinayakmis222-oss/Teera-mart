@@ -2,23 +2,23 @@ import { useEffect, useState } from "react";
 import { Navigate, Link } from "react-router-dom";
 import { api, inr } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
-import { ArrowLeft, Package, Truck, Home, CheckCircle2, ChevronDown, ChevronUp } from "lucide-react";
+import { ArrowLeft, Package, Truck, Home, CheckCircle2, ChevronDown, ChevronUp, MapPin, X } from "lucide-react";
 import { toast } from "sonner";
 
 const STATUS_META = {
   placed: { label: "Placed", cls: "bg-terracotta/15 text-terracotta" },
   confirmed: { label: "Confirmed", cls: "bg-sage/15 text-sage" },
-  shipped: { label: "Shipped", cls: "bg-ochre/15 text-ochre" },
-  out_for_delivery: { label: "Out for Delivery", cls: "bg-terracotta/15 text-terracotta" },
+  packed: { label: "Packed", cls: "bg-ochre/15 text-ochre" },
+  shipped: { label: "Shipped", cls: "bg-terracotta/15 text-terracotta" },
   delivered: { label: "Delivered", cls: "bg-sage/15 text-sage" },
   cancelled: { label: "Cancelled", cls: "bg-destructive/10 text-destructive" },
 };
 
 const NEXT_STATUS = {
-  placed: { next: "shipped", label: "Mark Shipped", icon: Package },
-  confirmed: { next: "shipped", label: "Mark Shipped", icon: Package },
-  shipped: { next: "out_for_delivery", label: "Out for Delivery", icon: Truck },
-  out_for_delivery: { next: "delivered", label: "Mark Delivered", icon: Home },
+  placed: { next: "confirmed", label: "Confirm Order", icon: CheckCircle2 },
+  confirmed: { next: "packed", label: "Mark Packed", icon: Package },
+  packed: { next: "shipped", label: "Mark Shipped", icon: Truck },
+  shipped: { next: "delivered", label: "Mark Delivered", icon: Home },
 };
 
 export default function SellerOrdersPage() {
@@ -26,6 +26,7 @@ export default function SellerOrdersPage() {
   const [orders, setOrders] = useState(null);
   const [open, setOpen] = useState({});
   const [filter, setFilter] = useState("all");
+  const [shipModal, setShipModal] = useState(null); // {order, link}
 
   const load = () => api.get("/seller/orders").then((r) => setOrders(r.data));
   useEffect(() => { if (user?.role === "seller") load(); }, [user]);
@@ -35,16 +36,23 @@ export default function SellerOrdersPage() {
   if (user.role !== "seller") return <Navigate to="/" replace />;
   if (orders === null) return <div className="container-x py-16 text-charcoal-muted">Loading orders…</div>;
 
-  const advance = async (o) => {
+  const advance = async (o, extra = {}) => {
     const meta = NEXT_STATUS[o.status];
     if (!meta) return;
     try {
-      await api.patch(`/seller/orders/${o.id}/status?status=${meta.next}`);
-      toast.success(`Order marked as ${meta.label.replace(/^Mark /, "").replace(/^Out for Delivery$/i, "Out for Delivery")}`);
+      await api.patch(`/seller/orders/${o.id}/status`, { status: meta.next, ...extra });
+      toast.success(`Order marked as ${STATUS_META[meta.next]?.label || meta.next}`);
       load();
     } catch (e) {
       toast.error(e.response?.data?.detail || "Failed");
     }
+  };
+
+  const openShipModal = (o) => setShipModal({ order: o, link: "" });
+  const submitShip = async () => {
+    if (!shipModal) return;
+    await advance(shipModal.order, { location_link: shipModal.link || null });
+    setShipModal(null);
   };
 
   const filtered = filter === "all" ? orders : orders.filter((o) => o.status === filter);
@@ -62,7 +70,7 @@ export default function SellerOrdersPage() {
       </div>
 
       <div className="flex gap-2 flex-wrap mb-5">
-        {["all", "placed", "confirmed", "shipped", "out_for_delivery", "delivered", "cancelled"].map((s) => (
+        {["all", "placed", "confirmed", "packed", "shipped", "delivered", "cancelled"].map((s) => (
           <button
             key={s}
             data-testid={`filter-${s}`}
@@ -99,6 +107,9 @@ export default function SellerOrdersPage() {
                       {o.payment_method === "cod" && (
                         <span className="text-[10px] uppercase tracking-widest font-semibold px-2 py-0.5 bg-off-white-alt text-charcoal-muted">COD</span>
                       )}
+                      {o.location_link && (
+                        <span className="text-[10px] uppercase tracking-widest font-semibold px-2 py-0.5 bg-sage/15 text-sage inline-flex items-center gap-1"><MapPin className="w-3 h-3" /> Map</span>
+                      )}
                     </div>
                     <div className="font-heading font-bold text-lg text-charcoal">{o.short_id}</div>
                     <div className="text-xs text-charcoal-muted mt-1">
@@ -122,8 +133,8 @@ export default function SellerOrdersPage() {
                   </button>
                   {advanceMeta && o.status !== "cancelled" && (
                     <button
-                      onClick={() => advance(o)}
-                      data-testid={`advance-${o.short_id}`}
+                      onClick={() => advanceMeta.next === "shipped" ? openShipModal(o) : advance(o)}
+                      data-testid={`update-status-${o.short_id}`}
                       className="btn-terracotta text-sm py-2 px-4"
                     >
                       <advanceMeta.icon className="w-4 h-4" /> {advanceMeta.label}
@@ -151,11 +162,22 @@ export default function SellerOrdersPage() {
                         <div className="text-xs uppercase tracking-[0.2em] text-charcoal-muted mb-1">Ship to</div>
                         <div className="text-charcoal font-medium">{o.address?.name} · {o.address?.phone}</div>
                         <div className="text-charcoal-muted">{o.address?.line1}{o.address?.line2 ? `, ${o.address.line2}` : ""}, {o.address?.city}, {o.address?.state} — {o.address?.pincode}</div>
+                        {o.location_link && (
+                          <a href={o.location_link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-terracotta hover:underline mt-2" data-testid={`map-link-${o.short_id}`}>
+                            <MapPin className="w-3 h-3" /> Delivery map
+                          </a>
+                        )}
                       </div>
                       <div>
-                        <div className="text-xs uppercase tracking-[0.2em] text-charcoal-muted mb-1">Payment</div>
-                        <div className="text-charcoal font-medium uppercase">{o.payment_method}</div>
-                        {o.razorpay_payment_id && <div className="text-[11px] text-charcoal-muted mt-1">Ref: {o.razorpay_payment_id}</div>}
+                        <div className="text-xs uppercase tracking-[0.2em] text-charcoal-muted mb-1">Timeline</div>
+                        <ul className="space-y-1">
+                          {(o.status_history || []).slice(-5).map((h, i) => (
+                            <li key={i} className="text-xs text-charcoal">
+                              <span className="capitalize font-medium">{h.status.replace(/_/g, " ")}</span>
+                              <span className="text-charcoal-muted"> · {new Date(h.at).toLocaleString("en-IN")}</span>
+                            </li>
+                          ))}
+                        </ul>
                       </div>
                     </div>
                   </div>
@@ -163,6 +185,40 @@ export default function SellerOrdersPage() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Shipped modal */}
+      {shipModal && (
+        <div className="fixed inset-0 z-50 bg-charcoal/40 grid place-items-center p-4" data-testid="ship-modal">
+          <div className="bg-white border border-border w-full max-w-md p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <div className="text-xs uppercase tracking-[0.3em] text-terracotta font-semibold">Mark Shipped</div>
+                <div className="font-heading font-bold text-xl text-charcoal">Order {shipModal.order.short_id}</div>
+              </div>
+              <button onClick={() => setShipModal(null)} className="p-2 hover:bg-off-white-alt"><X className="w-4 h-4" /></button>
+            </div>
+            <label className="block text-xs uppercase tracking-[0.2em] text-charcoal-muted font-semibold mb-1">
+              Delivery location link (optional)
+            </label>
+            <input
+              data-testid="ship-location-input"
+              value={shipModal.link}
+              onChange={(e) => setShipModal({ ...shipModal, link: e.target.value })}
+              placeholder="Paste Google Maps link"
+              className="w-full border-2 border-border focus:border-terracotta bg-off-white px-3 py-2.5 outline-none"
+            />
+            <div className="text-[11px] text-charcoal-muted mt-2">
+              Optional — leave blank to mark shipped without a map link. This never blocks the status update.
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setShipModal(null)} className="px-4 py-2 text-sm text-charcoal-muted hover:text-charcoal">Cancel</button>
+              <button data-testid="ship-modal-submit" onClick={submitShip} className="btn-terracotta text-sm py-2 px-4">
+                <Truck className="w-4 h-4" /> Mark Shipped
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
