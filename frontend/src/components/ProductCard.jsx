@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import { Star, Zap } from "lucide-react";
 import { useState } from "react";
-import { inr } from "../lib/api";
+import { inr, resolveImg } from "../lib/api";
 
 export default function ProductCard({ p }) {
   const [loaded, setLoaded] = useState(false);
@@ -15,7 +15,7 @@ export default function ProductCard({ p }) {
       <div className="relative aspect-square overflow-hidden bg-off-white-alt">
         {!loaded && <div className="absolute inset-0 bg-off-white-alt animate-pulse" data-testid="img-skeleton" />}
         <img
-          src={p.images?.[0]}
+          src={resolveImg(p.images?.[0])}
           alt={p.title}
           loading="lazy"
           onLoad={() => setLoaded(true)}

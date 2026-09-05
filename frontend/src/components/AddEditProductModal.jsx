@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
-import { api, inr } from "../lib/api";
-import { X, Plus, Trash2 } from "lucide-react";
+import { useEffect, useState, useRef } from "react";
+import { api, inr, API } from "../lib/api";
+import { X, Plus, Trash2, UploadCloud, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 const CATEGORIES = [
@@ -18,6 +18,34 @@ const EMPTY = { title: "", category: "tiles", price: "", mrp: "", stock: 0, desc
 export default function AddEditProductModal({ existing, onClose, onSaved }) {
   const [f, setF] = useState(EMPTY);
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef(null);
+
+  const resolveImg = (u) => (u?.startsWith("/api/uploads/") ? `${process.env.REACT_APP_BACKEND_URL}${u}` : u);
+
+  const doUpload = async (files) => {
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    try {
+      const uploaded = [];
+      for (const file of Array.from(files)) {
+        const fd = new FormData();
+        fd.append("file", file);
+        const { data } = await api.post("/uploads/image", fd, { headers: { "Content-Type": "multipart/form-data" } });
+        uploaded.push(data.url);
+      }
+      const existingImgs = f.images.filter((u) => u.trim());
+      setF({ ...f, images: [...existingImgs, ...uploaded] });
+      toast.success(`Uploaded ${uploaded.length} photo(s)`);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Upload failed");
+    } finally { setUploading(false); }
+  };
+
+  const onDrop = (e) => {
+    e.preventDefault();
+    if (e.dataTransfer?.files?.length) doUpload(e.dataTransfer.files);
+  };
 
   useEffect(() => {
     if (existing) {
@@ -109,17 +137,61 @@ export default function AddEditProductModal({ existing, onClose, onSaved }) {
           <textarea placeholder="Description" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} data-testid="product-description" rows={3} className="w-full border-2 border-border focus:border-terracotta bg-off-white px-3 py-3 outline-none" />
 
           <div>
-            <div className="text-xs uppercase tracking-[0.2em] text-charcoal-muted font-semibold mb-2">Images (URL) *</div>
-            {f.images.map((img, i) => (
-              <div key={i} className="flex gap-2 mb-2">
-                <input placeholder="https://…" value={img} onChange={(e) => setImage(i, e.target.value)} data-testid={`product-image-${i}`} className="flex-1 border-2 border-border focus:border-terracotta bg-off-white px-3 py-2 outline-none" />
-                {f.images.length > 1 && (
-                  <button type="button" onClick={() => removeImage(i)} className="p-2 border border-destructive/40 text-destructive"><Trash2 className="w-4 h-4" /></button>
-                )}
+            <div className="text-xs uppercase tracking-[0.2em] text-charcoal-muted font-semibold mb-2">Photos *</div>
+            <div
+              onDrop={onDrop}
+              onDragOver={(e) => e.preventDefault()}
+              onClick={() => fileRef.current?.click()}
+              data-testid="upload-dropzone"
+              className="border-2 border-dashed border-border hover:border-terracotta bg-off-white p-5 text-center cursor-pointer mb-3 transition-colors"
+            >
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/gif"
+                multiple
+                data-testid="upload-file-input"
+                onChange={(e) => doUpload(e.target.files)}
+                className="hidden"
+              />
+              {uploading ? (
+                <div className="inline-flex items-center gap-2 text-sm text-charcoal-muted"><Loader2 className="w-4 h-4 animate-spin" /> Uploading…</div>
+              ) : (
+                <div>
+                  <UploadCloud className="w-8 h-8 text-terracotta mx-auto mb-2" />
+                  <div className="text-sm text-charcoal font-medium">Drop photos here or click to browse</div>
+                  <div className="text-[11px] text-charcoal-muted mt-1">JPG/PNG/WEBP · Max 8MB each</div>
+                </div>
+              )}
+            </div>
+            {f.images.filter((u) => u.trim()).length > 0 && (
+              <div className="grid grid-cols-4 md:grid-cols-6 gap-2 mb-2" data-testid="image-previews">
+                {f.images.filter((u) => u.trim()).map((img, i) => (
+                  <div key={i} className="relative aspect-square border border-border bg-off-white-alt" data-testid={`image-preview-${i}`}>
+                    <img src={resolveImg(img)} alt="" className="w-full h-full object-cover" />
+                    <button
+                      type="button"
+                      data-testid={`remove-image-${i}`}
+                      onClick={() => setF({ ...f, images: f.images.filter((_, idx) => idx !== i) })}
+                      className="absolute top-1 right-1 w-5 h-5 grid place-items-center bg-charcoal/80 text-off-white rounded-full hover:bg-destructive"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))}
               </div>
-            ))}
-            <button type="button" onClick={addImage} data-testid="add-image-url" className="text-xs text-terracotta hover:underline inline-flex items-center gap-1"><Plus className="w-3 h-3" /> Add image URL</button>
-            <div className="text-[11px] text-charcoal-muted mt-1">Tip: upload later gets a proper file picker; for now paste any hosted image URL (Unsplash works great).</div>
+            )}
+            <details className="text-xs text-charcoal-muted">
+              <summary className="cursor-pointer hover:text-terracotta">Or paste image URLs</summary>
+              <div className="mt-2 space-y-2">
+                {f.images.map((img, i) => (
+                  <div key={i} className="flex gap-2">
+                    <input placeholder="https://…" value={img} onChange={(e) => setImage(i, e.target.value)} data-testid={`product-image-${i}`} className="flex-1 border-2 border-border focus:border-terracotta bg-off-white px-3 py-2 outline-none" />
+                  </div>
+                ))}
+                <button type="button" onClick={addImage} data-testid="add-image-url" className="text-xs text-terracotta hover:underline inline-flex items-center gap-1"><Plus className="w-3 h-3" /> Add URL row</button>
+              </div>
+            </details>
           </div>
 
           <div>

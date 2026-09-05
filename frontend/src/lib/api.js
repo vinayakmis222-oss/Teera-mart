@@ -7,6 +7,12 @@ export const api = axios.create({
   withCredentials: true,
 });
 
+export function resolveImg(url) {
+  if (!url) return url;
+  if (url.startsWith("/api/uploads/")) return `${process.env.REACT_APP_BACKEND_URL}${url}`;
+  return url;
+}
+
 export function formatApiErrorDetail(detail) {
   if (detail == null) return "Something went wrong. Please try again.";
   if (typeof detail === "string") return detail;

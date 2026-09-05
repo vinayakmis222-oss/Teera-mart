@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { api, inr } from "../lib/api";
-import { Package, ShoppingBag, IndianRupee, Star, Plus, ShieldCheck, ShieldAlert, Upload, ClipboardList, Zap, AlertTriangle, Edit3, Trash2, TrendingUp, ArrowRight } from "lucide-react";
+import { api, inr, resolveImg } from "../lib/api";
+import { Package, ShoppingBag, IndianRupee, Star, Plus, ShieldCheck, ShieldAlert, Upload, ClipboardList, Zap, AlertTriangle, Edit3, Trash2, TrendingUp, ArrowRight, Check, X as XIcon } from "lucide-react";
 import { toast } from "sonner";
 import AddEditProductModal from "../components/AddEditProductModal";
 
@@ -22,6 +22,20 @@ export default function SellerDashboardPage() {
   const [products, setProducts] = useState([]);
   const [orders, setOrders] = useState([]);
   const [modal, setModal] = useState(null); // {existing?}
+  const [inlineEdit, setInlineEdit] = useState({}); // {id: {price, stock}}
+
+  const startInline = (p) => setInlineEdit({ ...inlineEdit, [p.id]: { price: p.price, stock: p.stock } });
+  const cancelInline = (id) => { const next = { ...inlineEdit }; delete next[id]; setInlineEdit(next); };
+  const saveInline = async (p) => {
+    const edits = inlineEdit[p.id];
+    if (!edits) return;
+    try {
+      await api.patch(`/seller/products/${p.id}`, { price: parseFloat(edits.price) || p.price, stock: parseInt(edits.stock, 10) });
+      toast.success("Updated");
+      cancelInline(p.id);
+      loadAll();
+    } catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
+  };
 
   const loadAll = async () => {
     const [d, p, o] = await Promise.all([
@@ -200,11 +214,13 @@ export default function SellerDashboardPage() {
                 </tr>
               </thead>
               <tbody>
-                {products.map((p) => (
-                  <tr key={p.id} className="border-t border-border" data-testid={`listing-row-${p.id}`}>
+                {products.map((p) => {
+                  const edit = inlineEdit[p.id];
+                  return (
+                  <tr key={p.id} className={`border-t border-border ${p.low_stock ? "bg-ochre/5" : ""}`} data-testid={`listing-row-${p.id}`}>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
-                        <img src={p.images?.[0]} alt="" className="w-10 h-10 object-cover" loading="lazy" />
+                        <img src={resolveImg(p.images?.[0])} alt="" className="w-10 h-10 object-cover" loading="lazy" />
                         <div>
                           <Link to={`/product/${p.id}`} className="font-medium text-charcoal hover:text-terracotta line-clamp-1">{p.title}</Link>
                           <div className="text-[11px] text-charcoal-muted">{p.rating} ★ ({p.reviews_count})</div>
@@ -212,8 +228,45 @@ export default function SellerDashboardPage() {
                       </div>
                     </td>
                     <td className="px-4 py-3 text-charcoal-muted capitalize">{p.category.replace(/-/g, " ")}</td>
-                    <td className="px-4 py-3 text-right font-medium">{inr(p.price)}</td>
-                    <td className="px-4 py-3 text-right text-charcoal-muted">{p.stock}</td>
+                    <td className="px-4 py-3 text-right font-medium">
+                      {edit ? (
+                        <input
+                          type="number"
+                          value={edit.price}
+                          onChange={(e) => setInlineEdit({ ...inlineEdit, [p.id]: { ...edit, price: e.target.value } })}
+                          data-testid={`inline-price-${p.id}`}
+                          className="w-24 border-2 border-terracotta bg-off-white text-right px-2 py-1 outline-none text-sm"
+                        />
+                      ) : (
+                        <button
+                          onClick={() => startInline(p)}
+                          data-testid={`price-cell-${p.id}`}
+                          className="text-charcoal hover:text-terracotta hover:underline"
+                        >
+                          {inr(p.price)}
+                        </button>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {edit ? (
+                        <input
+                          type="number"
+                          value={edit.stock}
+                          onChange={(e) => setInlineEdit({ ...inlineEdit, [p.id]: { ...edit, stock: e.target.value } })}
+                          data-testid={`inline-stock-${p.id}`}
+                          className="w-20 border-2 border-terracotta bg-off-white text-right px-2 py-1 outline-none text-sm"
+                        />
+                      ) : (
+                        <button
+                          onClick={() => startInline(p)}
+                          data-testid={`stock-cell-${p.id}`}
+                          className={`hover:underline ${p.low_stock ? "text-destructive font-semibold" : "text-charcoal-muted"}`}
+                        >
+                          {p.stock}
+                          {p.low_stock && <span className="ml-1 text-[10px] uppercase tracking-widest" data-testid={`low-stock-badge-${p.id}`}>Low</span>}
+                        </button>
+                      )}
+                    </td>
                     <td className="px-4 py-3">
                       {stats.subscription_status === "active" && !seller?.effective_paused ? (
                         <span className="text-[10px] uppercase tracking-widest text-sage font-semibold">Live</span>
@@ -223,16 +276,30 @@ export default function SellerDashboardPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
-                        <button onClick={() => setModal({ existing: p })} data-testid={`edit-product-${p.id}`} className="text-xs border border-charcoal-muted text-charcoal hover:bg-off-white-alt px-2 py-1 inline-flex items-center gap-1">
-                          <Edit3 className="w-3 h-3" /> Edit
-                        </button>
-                        <button onClick={() => delProduct(p)} data-testid={`delete-product-${p.id}`} className="text-xs border border-destructive/40 text-destructive hover:bg-destructive/10 px-2 py-1 inline-flex items-center gap-1">
-                          <Trash2 className="w-3 h-3" /> Delete
-                        </button>
+                        {edit ? (
+                          <>
+                            <button onClick={() => saveInline(p)} data-testid={`inline-save-${p.id}`} className="text-xs border border-sage text-sage hover:bg-sage/10 px-2 py-1 inline-flex items-center gap-1">
+                              <Check className="w-3 h-3" /> Save
+                            </button>
+                            <button onClick={() => cancelInline(p.id)} data-testid={`inline-cancel-${p.id}`} className="text-xs border border-charcoal-muted text-charcoal-muted hover:bg-off-white-alt px-2 py-1 inline-flex items-center gap-1">
+                              <XIcon className="w-3 h-3" /> Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button onClick={() => setModal({ existing: p })} data-testid={`edit-product-${p.id}`} className="text-xs border border-charcoal-muted text-charcoal hover:bg-off-white-alt px-2 py-1 inline-flex items-center gap-1">
+                              <Edit3 className="w-3 h-3" /> Edit
+                            </button>
+                            <button onClick={() => delProduct(p)} data-testid={`delete-product-${p.id}`} className="text-xs border border-destructive/40 text-destructive hover:bg-destructive/10 px-2 py-1 inline-flex items-center gap-1">
+                              <Trash2 className="w-3 h-3" /> Delete
+                            </button>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

@@ -12,9 +12,10 @@ import jwt
 import hmac
 import hashlib
 import razorpay
+import requests
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Literal, Any
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, Query, UploadFile, File
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
@@ -33,6 +34,54 @@ RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "").strip()
 RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "").strip()
 RAZORPAY_ENABLED = bool(RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET)
 razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET)) if RAZORPAY_ENABLED else None
+
+# --- Object Storage (Emergent) ---
+STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
+STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
+EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "").strip()
+APP_NAME = "terramart"
+_storage_key: Optional[str] = None
+
+def init_storage(force: bool = False) -> Optional[str]:
+    global _storage_key
+    if _storage_key and not force:
+        return _storage_key
+    if not EMERGENT_LLM_KEY:
+        return None
+    try:
+        r = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_LLM_KEY}, timeout=15)
+        r.raise_for_status()
+        _storage_key = r.json().get("storage_key")
+    except Exception as e:
+        logger.error(f"Storage init failed: {e}")
+        _storage_key = None
+    return _storage_key
+
+def put_object(path: str, data: bytes, content_type: str) -> dict:
+    key = init_storage()
+    if not key:
+        raise HTTPException(503, "Object storage unavailable")
+    r = requests.put(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key, "Content-Type": content_type}, data=data, timeout=60)
+    if r.status_code == 404:
+        key = init_storage(force=True)
+        r = requests.put(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key, "Content-Type": content_type}, data=data, timeout=60)
+    r.raise_for_status()
+    return r.json()
+
+def get_object(path: str) -> tuple[bytes, str]:
+    key = init_storage()
+    if not key:
+        raise HTTPException(503, "Object storage unavailable")
+    r = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=30)
+    if r.status_code == 404:
+        key = init_storage(force=True)
+        r = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=30)
+    r.raise_for_status()
+    return r.content, r.headers.get("Content-Type", "application/octet-stream")
+
+LOW_STOCK_THRESHOLD = int(os.environ.get("LOW_STOCK_THRESHOLD", "5"))
+ALLOWED_IMAGE_MIME = {"image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"}
+MAX_UPLOAD_BYTES = 8 * 1024 * 1024  # 8MB
 
 app = FastAPI(title="TerraMart API")
 api = APIRouter(prefix="/api")
@@ -479,12 +528,70 @@ class SellerProductIn(BaseModel):
     images: List[str] = []
     variants: List[dict] = []
 
+class SellerProductPatch(BaseModel):
+    title: Optional[str] = None
+    category: Optional[str] = None
+    price: Optional[float] = Field(default=None, gt=0)
+    mrp: Optional[float] = None
+    stock: Optional[int] = None
+    description: Optional[str] = None
+    material: Optional[str] = None
+    images: Optional[List[str]] = None
+    variants: Optional[List[dict]] = None
+
+# --- Image upload ---
+@api.post("/uploads/image")
+async def upload_image(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    if (file.content_type or "").lower() not in ALLOWED_IMAGE_MIME:
+        raise HTTPException(400, "Only jpg / png / webp / gif images are allowed")
+    data = await file.read()
+    if len(data) == 0:
+        raise HTTPException(400, "Empty file")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(400, f"Max size is {MAX_UPLOAD_BYTES // (1024*1024)}MB")
+    ext = (file.filename or "").split(".")[-1].lower() if "." in (file.filename or "") else "bin"
+    if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
+        ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}.get(file.content_type, "bin")
+    path = f"{APP_NAME}/uploads/{user['id']}/{uuid.uuid4()}.{ext}"
+    try:
+        result = put_object(path, data, file.content_type)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Upload failed: {e}")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "storage_path": result["path"],
+        "user_id": user["id"],
+        "original_filename": file.filename,
+        "content_type": file.content_type,
+        "size": len(data),
+        "is_deleted": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.files.insert_one(doc)
+    return {"url": f"/api/uploads/{result['path']}", "path": result["path"], "size": len(data)}
+
+@api.get("/uploads/{path:path}")
+async def serve_image(path: str):
+    rec = await db.files.find_one({"storage_path": path, "is_deleted": False})
+    if not rec:
+        raise HTTPException(404, "File not found")
+    try:
+        data, ct = get_object(path)
+    except Exception:
+        raise HTTPException(404, "File not found")
+    return Response(content=data, media_type=rec.get("content_type") or ct, headers={"Cache-Control": "public, max-age=86400"})
+
 @api.get("/seller/products")
 async def seller_list_products(user: dict = Depends(require_seller)):
     seller = await db.sellers.find_one({"user_id": user["id"]}, {"_id": 0})
     if not seller:
         raise HTTPException(404, "Seller not found")
-    return await db.products.find({"seller_id": seller["id"]}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    products = await db.products.find({"seller_id": seller["id"]}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    for p in products:
+        p["low_stock"] = int(p.get("stock", 0)) < LOW_STOCK_THRESHOLD
+    return products
 
 @api.post("/seller/products")
 async def seller_create_product(body: SellerProductIn, user: dict = Depends(require_seller)):
@@ -500,7 +607,7 @@ async def seller_create_product(body: SellerProductIn, user: dict = Depends(requ
         raise HTTPException(400, "Unknown category")
     images = [i.strip() for i in (body.images or []) if i.strip()]
     if not images:
-        raise HTTPException(400, "At least one image URL required")
+        raise HTTPException(400, "At least one image is required")
     mrp = body.mrp if body.mrp and body.mrp > body.price else round(body.price * 1.3, 0)
     discount = int(round((mrp - body.price) / mrp * 100)) if mrp > body.price else 0
     doc = {
@@ -527,26 +634,30 @@ async def seller_create_product(body: SellerProductIn, user: dict = Depends(requ
     return doc
 
 @api.patch("/seller/products/{product_id}")
-async def seller_update_product(product_id: str, body: SellerProductIn, user: dict = Depends(require_seller)):
+async def seller_update_product(product_id: str, body: SellerProductPatch, user: dict = Depends(require_seller)):
     seller = await db.sellers.find_one({"user_id": user["id"]}, {"_id": 0})
     if not seller:
         raise HTTPException(404, "Seller not found")
     p = await db.products.find_one({"id": product_id, "seller_id": seller["id"]})
     if not p:
         raise HTTPException(404, "Product not found")
-    if body.category not in {c["slug"] for c in CATEGORIES}:
+    payload = body.model_dump(exclude_none=True)
+    if "category" in payload and payload["category"] not in {c["slug"] for c in CATEGORIES}:
         raise HTTPException(400, "Unknown category")
-    images = [i.strip() for i in (body.images or []) if i.strip()]
-    if not images:
-        raise HTTPException(400, "At least one image URL required")
-    mrp = body.mrp if body.mrp and body.mrp > body.price else round(body.price * 1.3, 0)
-    discount = int(round((mrp - body.price) / mrp * 100)) if mrp > body.price else 0
-    updates = {
-        "title": body.title, "category": body.category, "description": body.description or "",
-        "price": body.price, "mrp": mrp, "discount": discount, "stock": body.stock,
-        "material": body.material or "", "images": images, "variants": body.variants or [],
-    }
-    await db.products.update_one({"id": product_id}, {"$set": updates})
+    if "images" in payload:
+        imgs = [i.strip() for i in payload["images"] if i.strip()]
+        if not imgs:
+            raise HTTPException(400, "At least one image is required")
+        payload["images"] = imgs
+    # keep seller_verified in sync
+    payload["seller_verified"] = bool(seller.get("verified"))
+    # recompute discount if price/mrp touched
+    new_price = payload.get("price", p["price"])
+    new_mrp = payload.get("mrp", p.get("mrp") or new_price)
+    if new_mrp and new_mrp > new_price:
+        payload["discount"] = int(round((new_mrp - new_price) / new_mrp * 100))
+    if payload:
+        await db.products.update_one({"id": product_id}, {"$set": payload})
     return await db.products.find_one({"id": product_id}, {"_id": 0})
 
 @api.delete("/seller/products/{product_id}")
@@ -1532,6 +1643,11 @@ async def seed_data():
 
 @app.on_event("startup")
 async def startup():
+    try:
+        init_storage()
+        logger.info("Object storage initialized")
+    except Exception as e:
+        logger.error(f"Storage init failed: {e}")
     await db.users.create_index("email", unique=True)
     await db.users.create_index("phone")
     await db.products.create_index("category")
