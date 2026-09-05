@@ -1,8 +1,10 @@
 import { Link } from "react-router-dom";
 import { Star } from "lucide-react";
+import { useState } from "react";
 import { inr } from "../lib/api";
 
 export default function ProductCard({ p }) {
+  const [loaded, setLoaded] = useState(false);
   const discount = p.discount || Math.round(((p.mrp - p.price) / p.mrp) * 100);
   return (
     <Link
@@ -11,11 +13,13 @@ export default function ProductCard({ p }) {
       className="group bg-white border border-border hover:shadow-cardHover hover:-translate-y-1 transition-all duration-300 flex flex-col"
     >
       <div className="relative aspect-square overflow-hidden bg-off-white-alt">
+        {!loaded && <div className="absolute inset-0 bg-off-white-alt animate-pulse" data-testid="img-skeleton" />}
         <img
           src={p.images?.[0]}
           alt={p.title}
           loading="lazy"
-          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+          onLoad={() => setLoaded(true)}
+          className={`w-full h-full object-cover group-hover:scale-105 transition-all duration-500 ${loaded ? "opacity-100" : "opacity-0"}`}
         />
         {discount > 0 && (
           <div className="absolute top-2 left-2 bg-terracotta text-off-white text-[10px] font-bold uppercase tracking-wider px-2 py-1">
@@ -36,6 +40,11 @@ export default function ProductCard({ p }) {
           {p.mrp > p.price && <span className="text-xs text-charcoal-muted line-through">{inr(p.mrp)}</span>}
         </div>
         <div className="text-[11px] text-charcoal-muted truncate">{p.material}</div>
+        {p.seller_verified === false && (
+          <div className="text-[10px] uppercase tracking-widest text-charcoal-muted inline-flex items-center gap-1" data-testid="card-pending-note">
+            <span className="w-1.5 h-1.5 bg-charcoal-muted rounded-full" /> Pending verification
+          </div>
+        )}
       </div>
     </Link>
   );

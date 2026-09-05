@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api, inr } from "../lib/api";
-import { Package, ShoppingBag, IndianRupee, Star, Plus, ShieldCheck, ShieldAlert } from "lucide-react";
+import { Package, ShoppingBag, IndianRupee, Star, Plus, ShieldCheck, ShieldAlert, Upload, ClipboardList } from "lucide-react";
 
 export default function SellerDashboardPage() {
   const { user, loading } = useAuth();
@@ -38,9 +38,17 @@ export default function SellerDashboardPage() {
             )}
           </div>
         </div>
-        <button data-testid="add-product-btn" className="btn-terracotta">
-          <Plus className="w-4 h-4" /> Add Product
-        </button>
+        <div className="flex gap-2 flex-wrap">
+          <Link to="/seller/orders" data-testid="seller-orders-link" className="btn-outline-charcoal">
+            <ClipboardList className="w-4 h-4" /> Orders
+          </Link>
+          <Link to="/seller/bulk-upload" data-testid="seller-bulk-upload-link" className="btn-terracotta">
+            <Upload className="w-4 h-4" /> Bulk Upload
+          </Link>
+          <button data-testid="add-product-btn" className="btn-outline-charcoal">
+            <Plus className="w-4 h-4" /> Add Product
+          </button>
+        </div>
       </div>
 
       {err && <div className="bg-destructive/10 text-destructive p-4 mb-6">{err}</div>}

@@ -23,13 +23,16 @@ Full-stack multi-vendor e-commerce marketplace for construction materials & home
 - Local-storage cart with sticky floating cart button + full cart page (qty controls, subtotal)
 - Sonner toasts, mobile-first responsive, data-testid attributes on interactive elements
 
-## Implemented (Phase 2 — 2026-02): Buyer Checkout & Account
-- Cart Page: line items with variant/qty/remove, price breakdown (subtotal/delivery/discount/total), coupon apply/remove with quick-pick chips, free-delivery meter, sticky mobile "Proceed to Checkout" bar
-- Multi-step Checkout (Address → Payment → Review): saved address selection, inline new-address form, payment method selection (UPI/Card/Netbanking/COD - UI only), review, place order
-- Order Confirmation screen: TM-prefixed order ID, estimated delivery date, item list, total paid, Track Order & Continue Shopping actions
-- Buyer Login/Signup: email/password AND mobile+OTP (MOCKED — any 6-digit code) tabs
-- Buyer Account section: sidebar (Profile/My Orders/Addresses/Logout), Profile edit (name, phone), Addresses CRUD (home/work/other, default), My Orders list with status pills, Order Detail with 4-stage progress tracker (Placed → Shipped → Out for Delivery → Delivered), items grouped by seller with verified badge
-- Backend: Address CRUD, Coupons (WELCOME10/TERRA200/FIRSTBUY) with validation, Orders (create with snapshot per item incl. seller_id, list, get with seller enrichment, admin/seller status update), OTP mock endpoints
+## Implemented (Phase 3 — 2026-02): Payments, Bundles & Seller Tools
+- **Razorpay integration**: Real gateway wired for UPI/Card/Netbanking via Razorpay checkout modal + HMAC-SHA256 signature verify on backend. DEMO MODE runs automatically when `RAZORPAY_KEY_ID`/`RAZORPAY_KEY_SECRET` are absent from `/app/backend/.env` (auto-verifies for local testing). COD stays outside the gateway. Successful payment moves order.status → `confirmed` and payment_status → `paid`. Payment failure keeps cart intact and offers retry.
+- **Verified vs Pending Seller badge**: Product detail shows green `Verified` chip or neutral `Pending Verification` chip; product cards for unverified sellers show a small "Pending verification" note. `seller_verified` denormalised onto product docs (including bulk-uploaded products).
+- **Similar Products + Frequently Bought Together**: Backend `/api/products/{id}/similar` (same category, excluding self) and `/bought-together` (complementary category map). New UI section under product description with checkboxes and "Add all to cart".
+- **Coupon logic (DB-backed)**: `db.coupons` collection with expiry_date, min_order, max_off, type (percent/flat), is_active. Public list filters `expires_at > now`. Order creation revalidates coupon.
+- **Image lazy-loading & skeletons**: `loading="lazy"` on all product images plus `data-testid=img-skeleton` pulse placeholder that fades out on load. `ProductCardSkeleton` helper for grid loading.
+- **Bulk product CSV upload** (new seller tool): Sample CSV download, drag/drop parse (papaparse), preview table with per-row Ready/Error status, confirm import. Backend validates category, price, images; supports `Size:600x600@0;Size:800x800@250` variant syntax OR JSON.
+- **Seller Orders queue**: `/seller/orders` list + status filter pills; expandable rows with items, ship-to address, payment; "Mark Shipped → Out for Delivery → Delivered" advance button per order (per-seller ownership enforced).
+- **Buyer order cancellation**: On order detail page while status is `placed`/`confirmed`, buyer sees a Cancel Order button that moves the order to `cancelled`.
+- **Security hardening**: Login lockout — 5 failed attempts trigger 15-min account lockout (returns 423). Auth attempts tracked in `db.login_attempts` and cleared on successful login.
 
 ## Backlog / Next
 ### P0

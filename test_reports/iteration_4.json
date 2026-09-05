@@ -1,0 +1,60 @@
+{
+  "summary": "Iteration-4 regression retest of the 6 Phase-3 fixes + sanity pass on Phase-3 happy paths. Backend: 54/54 pytest cases pass (new /app/backend/tests/test_phase3_regressions.py with 9 cases + existing test_phase3/test_phase2/test_auth_security). Frontend: 4 Playwright journeys on the public preview URL (buyer COD checkout -> confirmation/detail copy -> cancel, buyer WELCOME10 + demo Razorpay UPI checkout, seller1 orders-queue advance toast, seller3 CSV bulk upload -> catalogue pending note). ALL 6 REGRESSIONS ARE FIXED AND VERIFIED. Two NEW issues found: (1) backend/.env line 3 is malformed so JWT_SECRET (and CORS_ORIGINS) are never loaded and the app silently falls back to the hardcoded dev secret; (2) POST /api/orders never writes a payment_status field (absent until /payments/verify). Previously-reported minor items still open: non-idempotent admin seed, silent coupon rejection at order time, CategoryPage seller filter showing raw IDs, native sort <select>, stale 'Phase 2 - coming soon' card on seller dashboard.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "backend/.env (JWT signing)", "issue": "Line 3 contains two variables with no newline: CORS_ORIGINS=\"*\"JWT_SECRET=\"3d7f...\". dotenv drops BOTH keys (verified: dotenv_values() has no JWT_SECRET and emits 'could not parse statement starting at line 3'). server.py therefore signs/verifies JWTs with the hardcoded fallback 'dev-secret-change-me'. Fix: put JWT_SECRET on its own line.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/orders", "issue": "Created order documents have no payment_status key at all (only set later by /payments/verify). UI works because it relies on a falsy check, but seller queue/COD logic and any strict consumer would break. Set payment_status='pending' (or 'unpaid') at creation."},
+      {"endpoint": "seed_data() admin seeding", "issue": "STILL OPEN from iteration_3: admin is inserted only when missing, so changing ADMIN_PASSWORD in .env never updates the existing hash (playbook expects idempotent seed with password update)."},
+      {"endpoint": "POST /api/orders (coupon)", "issue": "STILL OPEN: an invalid/expired coupon_code is swallowed (discount=0) with no signal to the client, so the charged total can differ from what the buyer saw in the cart."},
+      {"endpoint": "PATCH /api/orders/{id}/status", "issue": "STILL OPEN: legacy endpoint lets ANY seller/admin advance ANY order (no seller_ids ownership check), unlike /api/seller/orders/{id}/status."},
+      {"endpoint": "db.orders / test data", "issue": "Seller1 queue now shows 83 orders because API regression suites keep creating orders (no order cleanup endpoint). Consider a TEST_ order cleanup path or seeded-buyer scoping; catalogue TEST_ products were cleaned up by this run."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "SellerDashboardPage", "issue": "Stale placeholder card 'Your listings — Product management coming soon.' tagged 'Phase 2' still present although bulk upload exists.", "selector": "SellerDashboardPage.jsx:64", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "CategoryPage", "issues": ["STILL OPEN: Seller filter renders raw truncated IDs ('Seller 1ec6a2', 'Seller e94122') instead of seller business names", "STILL OPEN: Sort control is a native browser <select>, not the shadcn Select component", "All tile products render the same 3-4 seeded Unsplash images, so the grid looks like one repeated photo"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase3_regressions.py",
+    "/app/backend/tests/test_phase3.py",
+    "/app/backend/tests/test_auth_security.py",
+    "/app/backend/tests/test_phase2.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "HIGH: fix backend/.env line 3 (split CORS_ORIGINS and JWT_SECRET onto separate lines) and restart backend — JWT_SECRET is currently NOT loaded and tokens are signed with the hardcoded dev fallback.",
+    "Set payment_status ('pending') on order creation in POST /api/orders.",
+    "Make admin seeding idempotent (update password_hash when ADMIN_PASSWORD changes).",
+    "Surface coupon rejection at order creation instead of silently zeroing the discount.",
+    "Add seller ownership check to (or remove) legacy PATCH /api/orders/{id}/status.",
+    "Remove the stale 'Phase 2 / coming soon' card from SellerDashboardPage.",
+    "CategoryPage: use seller business_name in the seller filter and replace the native sort <select> with the shadcn Select."
+  ],
+  "critical_code_review_comments": [
+    "os.environ.get('JWT_SECRET', 'dev-secret-change-me') hides the broken .env — required security config should fail fast (raise) when missing instead of defaulting.",
+    "server.py is 1004 lines and still mixes auth, catalog, orders, payments, seller tools and seeding; split into routers + a seed module.",
+    "Order document shape is built inline in create_order without payment_status/razorpay fields; define a single Pydantic/dict builder so payment fields always exist.",
+    "SellerOrdersPage advance() derives the toast text via meta.label.replace(/^Mark /,'') — works, but keep an explicit past-tense label per status in NEXT_STATUS to avoid string-munging fragility."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase3_regressions.py",
+    "/app/backend/tests/test_phase3.py",
+    "/app/backend/tests/test_auth_security.py",
+    "/app/backend/tests/_util_clear_lockouts.py",
+    "/app/backend/tests/_util_cleanup_test_products.py"
+  ],
+  "success_rate": {"backend": "100% (54/54 pytest)", "frontend": "100% of the 4 regression/sanity journeys passed"},
+  "seed_data_creation": "API buyers TEST_reg_*/TEST_lock_*/TEST_reset_*/TEST_iso_*/TEST_buyer_* and their orders remain in db (no delete endpoint). All TEST_ products created by bulk-upload tests were deleted (7 stale docs from iteration_3 + 1 UI-created). db.login_attempts cleared so no account is locked out. UI buyer qa_buyer_178857931224@example.com reused: placed 1 COD order (cancelled) and 1 UPI demo-paid order (TM8030C048, later advanced to shipped by seller1).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Buyer: qa_buyer_178857931224@example.com / Buyer@123 ; Seller verified: seller1@terramart.com / Seller@123 ; Seller unverified: seller3@terramart.com / Seller@123 ; Admin: admin@terramart.com / Admin@123",
+  "context_for_next_testing_agent": "Run `pytest /app/backend/tests/ -p no:randomly -q` (54 tests, all green, ~85s). test_phase3_regressions.py covers coupon-listing/expiry, login lockout (423) incl. counter-reset, bulk-upload seller_verified denormalisation, and the coupon+demo-payment happy path; it cleans its own lockout docs and TEST_ products. Utility scripts: backend/tests/_util_clear_lockouts.py (unstick a locked email) and _util_cleanup_test_products.py (purge TEST_ products + all lockouts). Playwright notes: use [data-testid=seller-login-email/password/submit] (generic input[type=email] selectors flaked and left the form empty); the CSV input [data-testid=csv-file-input] is class='hidden' so call set_input_files directly instead of wait_for_selector(visible); ProductCard pending note renders as uppercase 'PENDING VERIFICATION' via CSS, so assert case-insensitively; toasts are [data-sonner-toast]; cancel-order-btn triggers window.confirm (page.once('dialog', accept)).",
+  "rca_of_the_issue": "All six reported regressions verified fixed: (1) list_coupons now filters expires_at>now -> GET /api/coupons returns exactly WELCOME10/TERRA200/FIRSTBUY while /coupons/apply EXPIRED10 still 400 'expired'; (2) login uses db.login_attempts with 5-failure/15-min lockout -> 6th attempt 423 and a successful login clears the counter (also verified lockout is per-email); (3) bulk_upload_products sets seller_verified from the seller doc -> seller3 bulk product returns seller_verified=false via /api/products?seller_id=... and its ProductCard renders data-testid=card-pending-note; (4) seller advance toast now reads 'Order marked as Shipped'; (5) COD order detail shows 'Cash on Delivery (pay on delivery)' and a paid UPI order shows 'Paid via UPI'; (6) confirmation page shows 'Total (Cash on Delivery)' for COD and 'Total paid' for demo-paid UPI. NEW: the malformed backend/.env line 3 means JWT_SECRET is never read; because server.py supplies a default, JWTs are signed with 'dev-secret-change-me' — a predictable secret in a deployed environment and a token-invalidation risk once the .env is fixed."
+}

@@ -9,8 +9,11 @@ import uuid
 import logging
 import bcrypt
 import jwt
+import hmac
+import hashlib
+import razorpay
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Any
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, Query
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -26,6 +29,10 @@ JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret-change-me")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@terramart.com")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Admin@123")
+RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "").strip()
+RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "").strip()
+RAZORPAY_ENABLED = bool(RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET)
+razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET)) if RAZORPAY_ENABLED else None
 
 app = FastAPI(title="TerraMart API")
 api = APIRouter(prefix="/api")
@@ -172,14 +179,46 @@ async def register(body: RegisterIn, response: Response):
     set_auth_cookies(response, access, refresh)
     return {"id": uid, "email": email, "name": body.name, "role": body.role, "token": access}
 
+MAX_LOGIN_ATTEMPTS = 5
+LOCKOUT_MINUTES = 15
+
+async def _record_failed_login(email: str):
+    now = datetime.now(timezone.utc)
+    await db.login_attempts.update_one(
+        {"email": email},
+        {"$inc": {"failures": 1}, "$set": {"last_at": now.isoformat()}},
+        upsert=True,
+    )
+
+async def _clear_login_attempts(email: str):
+    await db.login_attempts.delete_one({"email": email})
+
+async def _check_lockout(email: str):
+    rec = await db.login_attempts.find_one({"email": email})
+    if not rec:
+        return
+    if rec.get("failures", 0) < MAX_LOGIN_ATTEMPTS:
+        return
+    try:
+        last = datetime.fromisoformat(rec["last_at"].replace("Z", "+00:00"))
+    except Exception:
+        return
+    if datetime.now(timezone.utc) - last < timedelta(minutes=LOCKOUT_MINUTES):
+        raise HTTPException(423, f"Account temporarily locked. Try again in {LOCKOUT_MINUTES} minutes.")
+    # window expired — reset
+    await _clear_login_attempts(email)
+
 @api.post("/auth/login")
 async def login(body: LoginIn, response: Response):
     email = body.email.lower()
+    await _check_lockout(email)
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(body.password, user["password_hash"]):
+        await _record_failed_login(email)
         raise HTTPException(401, "Invalid email or password")
     if body.role and user["role"] != body.role and user["role"] != "admin":
         raise HTTPException(403, f"This account is not a {body.role} account")
+    await _clear_login_attempts(email)
     access = create_token(user["id"], email, user["role"], "access")
     refresh = create_token(user["id"], email, user["role"], "refresh")
     set_auth_cookies(response, access, refresh)
@@ -399,33 +438,51 @@ async def otp_verify(body: OtpVerifyIn, response: Response):
     set_auth_cookies(response, access, refresh)
     return {"id": user["id"], "email": user["email"], "name": user["name"], "role": user["role"], "phone": user.get("phone"), "token": access}
 
-# ------------------ COUPONS (MOCK) ------------------
-COUPONS = {
-    "WELCOME10": {"type": "percent", "value": 10, "max_off": 500, "min_order": 0, "label": "10% off up to ₹500"},
-    "TERRA200":  {"type": "flat",    "value": 200, "min_order": 1500, "label": "Flat ₹200 off on ₹1500+"},
-    "FIRSTBUY":  {"type": "percent", "value": 15, "max_off": 800, "min_order": 999, "label": "15% off up to ₹800 (min ₹999)"},
-}
+# ------------------ COUPONS (DB-backed) ------------------
+DEFAULT_COUPONS = [
+    {"code": "WELCOME10", "type": "percent", "value": 10, "max_off": 500, "min_order": 0, "label": "10% off up to ₹500", "expires_at": (datetime.now(timezone.utc) + timedelta(days=90)).isoformat(), "is_active": True},
+    {"code": "TERRA200",  "type": "flat",    "value": 200, "min_order": 1500, "label": "Flat ₹200 off on ₹1500+", "expires_at": (datetime.now(timezone.utc) + timedelta(days=60)).isoformat(), "is_active": True},
+    {"code": "FIRSTBUY",  "type": "percent", "value": 15, "max_off": 800, "min_order": 999, "label": "15% off up to ₹800 (min ₹999)", "expires_at": (datetime.now(timezone.utc) + timedelta(days=180)).isoformat(), "is_active": True},
+    {"code": "EXPIRED10", "type": "percent", "value": 10, "max_off": 300, "min_order": 0, "label": "Expired demo coupon", "expires_at": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(), "is_active": True},
+]
+
+async def _compute_discount(code: str, subtotal: float):
+    c = await db.coupons.find_one({"code": code.strip().upper()}, {"_id": 0})
+    if not c:
+        raise HTTPException(400, "Invalid coupon code")
+    if not c.get("is_active", True):
+        raise HTTPException(400, "This coupon is no longer active")
+    try:
+        exp = datetime.fromisoformat(c["expires_at"].replace("Z", "+00:00"))
+        if exp < datetime.now(timezone.utc):
+            raise HTTPException(400, "This coupon has expired")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+    if subtotal < c.get("min_order", 0):
+        raise HTTPException(400, f"Minimum order ₹{c['min_order']} required for {c['code']}")
+    if c["type"] == "percent":
+        discount = min(subtotal * c["value"] / 100, c.get("max_off", 1e9))
+    else:
+        discount = c["value"]
+    return c, round(discount, 2)
 
 @api.get("/coupons")
 async def list_coupons():
-    return [{"code": k, **v} for k, v in COUPONS.items()]
+    now_iso = datetime.now(timezone.utc).isoformat()
+    return await db.coupons.find(
+        {"is_active": True, "expires_at": {"$gt": now_iso}},
+        {"_id": 0},
+    ).to_list(50)
 
 @api.post("/coupons/apply")
 async def apply_coupon(body: CouponApplyIn):
-    code = body.code.strip().upper()
-    if code not in COUPONS:
-        raise HTTPException(400, "Invalid coupon code")
-    c = COUPONS[code]
-    if body.subtotal < c.get("min_order", 0):
-        raise HTTPException(400, f"Minimum order ₹{c['min_order']} required for {code}")
-    if c["type"] == "percent":
-        discount = min(body.subtotal * c["value"] / 100, c.get("max_off", 1e9))
-    else:
-        discount = c["value"]
-    return {"code": code, "discount": round(discount, 2), "label": c["label"]}
+    c, discount = await _compute_discount(body.code, body.subtotal)
+    return {"code": c["code"], "discount": discount, "label": c["label"], "expires_at": c.get("expires_at")}
 
 # ------------------ ORDERS ------------------
-STATUS_FLOW = ["placed", "shipped", "out_for_delivery", "delivered", "cancelled"]
+STATUS_FLOW = ["placed", "confirmed", "shipped", "out_for_delivery", "delivered", "cancelled"]
 
 @api.post("/orders")
 async def create_order(body: OrderCreateIn, user: dict = Depends(get_current_user)):
@@ -464,11 +521,12 @@ async def create_order(body: OrderCreateIn, user: dict = Depends(get_current_use
     discount = 0.0
     coupon_label = None
     if body.coupon_code:
-        code = body.coupon_code.strip().upper()
-        c = COUPONS.get(code)
-        if c and subtotal >= c.get("min_order", 0):
-            discount = min(subtotal * c["value"] / 100, c.get("max_off", 1e9)) if c["type"] == "percent" else c["value"]
+        try:
+            c, discount = await _compute_discount(body.coupon_code, subtotal)
             coupon_label = c["label"]
+        except HTTPException:
+            # Invalid/expired coupon at order time — ignore silently, don't fail order
+            discount = 0.0
 
     total = round(subtotal + delivery - discount, 2)
     order_id = str(uuid.uuid4())
@@ -525,6 +583,241 @@ async def update_order_status(order_id: str, status: str, user: dict = Depends(g
     await db.orders.update_one({"id": order_id}, {
         "$set": {"status": status},
         "$push": {"status_history": {"status": status, "at": datetime.now(timezone.utc).isoformat()}},
+    })
+    return {"ok": True, "status": status}
+
+@api.post("/orders/{order_id}/cancel")
+async def cancel_order(order_id: str, user: dict = Depends(get_current_user)):
+    o = await db.orders.find_one({"id": order_id, "user_id": user["id"]})
+    if not o:
+        raise HTTPException(404, "Order not found")
+    if o.get("status") not in ("placed", "confirmed"):
+        raise HTTPException(400, "Order can no longer be cancelled")
+    await db.orders.update_one({"id": order_id}, {
+        "$set": {"status": "cancelled", "cancelled_at": datetime.now(timezone.utc).isoformat()},
+        "$push": {"status_history": {"status": "cancelled", "at": datetime.now(timezone.utc).isoformat()}},
+    })
+    return {"ok": True, "status": "cancelled"}
+
+# ------------------ SIMILAR & BOUGHT-TOGETHER ------------------
+@api.get("/products/{product_id}/similar")
+async def similar_products(product_id: str, limit: int = 8):
+    p = await db.products.find_one({"id": product_id}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "Not found")
+    cursor = db.products.find(
+        {"category": p["category"], "id": {"$ne": product_id}},
+        {"_id": 0},
+    ).sort("rating", -1)
+    return await cursor.to_list(limit)
+
+BOUGHT_TOGETHER_MAP = {
+    "tiles": ["home-decor", "flooring", "wall-stickers"],
+    "wall-stencils": ["paints", "wall-stickers"],
+    "wall-stickers": ["wall-stencils", "paints"],
+    "wallpapers": ["home-decor", "paints"],
+    "paints": ["wall-stencils", "home-decor", "wallpapers"],
+    "home-decor": ["wallpapers", "paints", "tiles"],
+    "flooring": ["tiles", "home-decor"],
+}
+
+@api.get("/products/{product_id}/bought-together")
+async def bought_together(product_id: str):
+    p = await db.products.find_one({"id": product_id}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "Not found")
+    complementary_cats = BOUGHT_TOGETHER_MAP.get(p["category"], [])
+    picks = []
+    for cat in complementary_cats:
+        item = await db.products.find_one(
+            {"category": cat, "id": {"$ne": product_id}},
+            {"_id": 0},
+            sort=[("rating", -1)],
+        )
+        if item:
+            picks.append(item)
+        if len(picks) >= 3:
+            break
+    return {"anchor": p, "items": picks[:3]}
+
+# ------------------ PAYMENTS (RAZORPAY) ------------------
+@api.get("/payments/config")
+async def payment_config():
+    return {"key_id": RAZORPAY_KEY_ID if RAZORPAY_ENABLED else "", "enabled": RAZORPAY_ENABLED}
+
+@api.post("/payments/create/{order_id}")
+async def create_payment(order_id: str, user: dict = Depends(get_current_user)):
+    o = await db.orders.find_one({"id": order_id, "user_id": user["id"]}, {"_id": 0})
+    if not o:
+        raise HTTPException(404, "Order not found")
+    if o.get("payment_status") == "paid":
+        raise HTTPException(400, "Order already paid")
+    if o.get("payment_method") == "cod":
+        raise HTTPException(400, "COD orders do not require gateway payment")
+
+    amount_paise = int(round(o["total"] * 100))
+    receipt = ("rcpt_" + o["short_id"])[:40]
+
+    if not RAZORPAY_ENABLED:
+        # DEMO MODE — no real gateway keys configured yet
+        return {
+            "demo_mode": True,
+            "order_id": order_id,
+            "razorpay_order_id": f"demo_rzp_{uuid.uuid4().hex[:16]}",
+            "amount": amount_paise,
+            "currency": "INR",
+            "key_id": "",
+        }
+
+    rzp_order = razorpay_client.order.create({
+        "amount": amount_paise,
+        "currency": "INR",
+        "receipt": receipt,
+        "payment_capture": 1,
+        "notes": {"internal_order_id": order_id, "short_id": o["short_id"]},
+    })
+    await db.orders.update_one({"id": order_id}, {"$set": {"razorpay_order_id": rzp_order["id"]}})
+    return {
+        "demo_mode": False,
+        "order_id": order_id,
+        "razorpay_order_id": rzp_order["id"],
+        "amount": rzp_order["amount"],
+        "currency": rzp_order["currency"],
+        "key_id": RAZORPAY_KEY_ID,
+    }
+
+class PaymentVerifyIn(BaseModel):
+    order_id: str
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: Optional[str] = None
+    demo_mode: bool = False
+
+@api.post("/payments/verify")
+async def verify_payment(body: PaymentVerifyIn, user: dict = Depends(get_current_user)):
+    o = await db.orders.find_one({"id": body.order_id, "user_id": user["id"]})
+    if not o:
+        raise HTTPException(404, "Order not found")
+
+    if body.demo_mode or not RAZORPAY_ENABLED:
+        # accept without real signature verification (demo mode)
+        pass
+    else:
+        expected = hmac.new(
+            RAZORPAY_KEY_SECRET.encode(),
+            f"{body.razorpay_order_id}|{body.razorpay_payment_id}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        if not body.razorpay_signature or not hmac.compare_digest(expected, body.razorpay_signature):
+            await db.orders.update_one({"id": body.order_id}, {
+                "$set": {"payment_status": "failed"},
+            })
+            raise HTTPException(400, "Payment signature verification failed")
+
+    await db.orders.update_one({"id": body.order_id}, {
+        "$set": {
+            "status": "confirmed",
+            "payment_status": "paid",
+            "razorpay_payment_id": body.razorpay_payment_id,
+            "razorpay_signature": body.razorpay_signature,
+            "paid_at": datetime.now(timezone.utc).isoformat(),
+        },
+        "$push": {"status_history": {"status": "confirmed", "at": datetime.now(timezone.utc).isoformat()}},
+    })
+    return {"ok": True, "status": "confirmed"}
+
+# ------------------ SELLER: BULK UPLOAD + ORDERS ------------------
+class BulkProductIn(BaseModel):
+    name: str
+    category: str
+    price: float
+    stock: int = 0
+    description: Optional[str] = ""
+    images: List[str] = []
+    variants: List[dict] = []
+    material: Optional[str] = ""
+    mrp: Optional[float] = None
+
+class BulkUploadIn(BaseModel):
+    products: List[BulkProductIn]
+
+@api.post("/seller/products/bulk")
+async def bulk_upload_products(body: BulkUploadIn, user: dict = Depends(require_seller)):
+    seller = await db.sellers.find_one({"user_id": user["id"]}, {"_id": 0})
+    if not seller:
+        raise HTTPException(404, "Seller profile not found")
+
+    valid_cats = {c["slug"] for c in CATEGORIES}
+    seller_verified = bool(seller.get("verified"))
+    inserted = []
+    errors = []
+    docs_to_insert = []
+    for idx, p in enumerate(body.products, start=1):
+        if p.category not in valid_cats:
+            errors.append({"row": idx, "name": p.name, "error": f"Unknown category '{p.category}'"})
+            continue
+        if p.price <= 0:
+            errors.append({"row": idx, "name": p.name, "error": "Price must be > 0"})
+            continue
+        images = [img for img in (p.images or []) if img.strip()]
+        if not images:
+            errors.append({"row": idx, "name": p.name, "error": "At least one image URL required"})
+            continue
+        mrp = p.mrp if p.mrp and p.mrp > p.price else round(p.price * 1.3, 0)
+        discount = int(round((mrp - p.price) / mrp * 100)) if mrp > p.price else 0
+        doc = {
+            "id": str(uuid.uuid4()),
+            "seller_id": seller["id"],
+            "seller_verified": seller_verified,
+            "category": p.category,
+            "title": p.name,
+            "description": p.description or "",
+            "price": p.price,
+            "mrp": mrp,
+            "discount": discount,
+            "stock": p.stock,
+            "material": p.material or "",
+            "images": images,
+            "variants": p.variants or [],
+            "rating": 0.0,
+            "reviews_count": 0,
+            "trending": False,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        docs_to_insert.append(doc)
+        inserted.append({"id": doc["id"], "title": doc["title"]})
+
+    if docs_to_insert:
+        await db.products.insert_many(docs_to_insert)
+
+    return {"inserted": len(inserted), "errors": errors, "products": inserted}
+
+@api.get("/seller/orders")
+async def seller_orders(user: dict = Depends(require_seller)):
+    seller = await db.sellers.find_one({"user_id": user["id"]}, {"_id": 0})
+    if not seller:
+        raise HTTPException(404, "Seller profile not found")
+    cursor = db.orders.find({"seller_ids": seller["id"]}, {"_id": 0}).sort("created_at", -1)
+    orders = await cursor.to_list(200)
+    # Filter items to only this seller's line items for the view
+    for o in orders:
+        o["items"] = [it for it in o["items"] if it.get("seller_id") == seller["id"]]
+        o["seller_total"] = round(sum(it["line_total"] for it in o["items"]), 2)
+    return orders
+
+@api.patch("/seller/orders/{order_id}/status")
+async def seller_update_status(order_id: str, status: str, user: dict = Depends(require_seller)):
+    if status not in ("shipped", "out_for_delivery", "delivered"):
+        raise HTTPException(400, "Sellers can only mark shipped / out_for_delivery / delivered")
+    seller = await db.sellers.find_one({"user_id": user["id"]}, {"_id": 0})
+    if not seller:
+        raise HTTPException(404, "Seller profile not found")
+    o = await db.orders.find_one({"id": order_id})
+    if not o or seller["id"] not in o.get("seller_ids", []):
+        raise HTTPException(404, "Order not found")
+    await db.orders.update_one({"id": order_id}, {
+        "$set": {"status": status},
+        "$push": {"status_history": {"status": status, "at": datetime.now(timezone.utc).isoformat(), "by": seller["id"]}},
     })
     return {"ok": True, "status": status}
 
@@ -676,7 +969,19 @@ async def startup():
     await db.orders.create_index("user_id")
     await db.orders.create_index("seller_ids")
     await db.addresses.create_index("user_id")
+    await db.coupons.create_index("code", unique=True)
+    # seed coupons if missing
+    for c in DEFAULT_COUPONS:
+        await db.coupons.update_one({"code": c["code"]}, {"$setOnInsert": c}, upsert=True)
     await seed_data()
+    # denormalise seller.verified onto products for card display
+    sellers_all = await db.sellers.find({}, {"_id": 0}).to_list(500)
+    verified_ids = [s["id"] for s in sellers_all if s.get("verified")]
+    unverified_ids = [s["id"] for s in sellers_all if not s.get("verified")]
+    if verified_ids:
+        await db.products.update_many({"seller_id": {"$in": verified_ids}}, {"$set": {"seller_verified": True}})
+    if unverified_ids:
+        await db.products.update_many({"seller_id": {"$in": unverified_ids}}, {"$set": {"seller_verified": False}})
 
 @app.on_event("shutdown")
 async def shutdown():

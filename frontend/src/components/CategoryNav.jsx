@@ -12,7 +12,7 @@ export default function CategoryNav() {
   return (
     <nav className="bg-white border-b border-border sticky top-[64px] z-40" data-testid="category-nav">
       <div className="container-x">
-        <ul className="flex items-center gap-1 overflow-x-auto py-2 no-scrollbar">
+        <ul className="flex items-center gap-1 overflow-x-auto py-2 no-scrollbar font-heading">
           {cats.map((c) => {
             const Icon = ICONS[c.icon] || Grid2x2;
             return (

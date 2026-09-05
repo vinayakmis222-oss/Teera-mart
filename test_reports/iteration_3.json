@@ -1,0 +1,59 @@
+{
+  "summary": "Phase-3 full regression: 45 pytest cases (test_phase3.py new + test_auth_security.py new + existing test_phase2.py) and 5 Playwright UI journeys against the public preview URL. Backend 43/45 passing. All Phase-3 features verified end-to-end: DB-backed coupons with expiry/min-order, similar + frequently-bought-together, Razorpay DEMO payment flow (create -> verify -> order.status=confirmed/payment_status=paid), buyer cancel, seller bulk CSV upload (download sample -> preview -> confirm import), seller orders queue with status advance, seller verified/pending badges, lazy-load image skeletons. Two real defects found (expired coupon leaking into GET /api/coupons; no brute-force login lockout) plus several minor copy/UX issues.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/coupons", "issue": "Returns 4 coupons incl. EXPIRED10 because the query only filters is_active and ignores expires_at. Spec expects 3 active coupons; this also regresses tests/test_phase2.py::TestCoupons::test_list_coupons. Fix: add {\"expires_at\": {\"$gt\": now_iso}} to the find filter (or set EXPIRED10 is_active=false and keep the apply-time expiry check)."},
+      {"endpoint": "POST /api/auth/login", "issue": "No brute-force protection: 6 consecutive wrong passwords all return 401 with no lockout/429/423 and no failed-attempt counter. Playbook requires lockout after 5 failures."},
+      {"endpoint": "POST /api/seller/products/bulk", "issue": "Inserted products omit the denormalised `seller_verified` flag (verified via API: value is null for bulk products). ProductCard renders the pending note only when seller_verified === false, so bulk products of an unverified seller (seller3) will never show 'Pending verification' until the app restarts and re-denormalises. Set seller_verified from the seller doc at insert time."},
+      {"endpoint": "seed_data()", "issue": "Admin is only inserted when missing; if ADMIN_PASSWORD changes in .env the existing admin hash is never updated (playbook expects idempotent seed that updates the password)."},
+      {"endpoint": "POST /api/orders", "issue": "Invalid/expired coupon at order time is silently swallowed (discount=0) - order total may differ from the total the buyer saw. Consider returning 400 or an explicit coupon_rejected flag so the UI can inform the user."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "SellerOrdersPage", "issue": "Success toast reads 'Marked Mark Shipped' (duplicated verb) because it interpolates the button label: toast.success(`Marked ${meta.label}`).", "selector": "[data-testid^=\"advance-\"]", "priority": "LOW"},
+      {"component": "OrderDetailPage / OrderConfirmationPage", "issue": "Payment summary always says 'Paid via COD' for unpaid Cash-on-Delivery orders; should read 'Cash on Delivery (pay on delivery)'. Success page also shows 'Total paid' for COD.", "selector": "[data-testid=\"order-detail\"]", "priority": "LOW"},
+      {"component": "SellerDashboardPage", "issue": "Stale 'PHASE 2 - Product management coming soon / Order queue, shipping labels' placeholder cards remain even though Orders queue and Bulk upload now exist.", "selector": "[data-testid=\"seller-orders-link\"] (surrounding cards)", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "CategoryPage", "issues": ["Seller filter lists raw truncated IDs ('Seller 1ec6a2', 'Seller e94122') instead of business names - unusable filter labels", "Sort control is a native browser <select> instead of the shadcn Select component", "All products in a category share the same 3-4 seeded Unsplash images, so Similar Products / grid rows look like duplicates of one image"]},
+      {"screen": "ProductDetail - Similar Products & Bought Together", "issues": ["Bundle/similar thumbnails are identical images for same-category items (seed data reuses one image list per category)"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase3.py",
+    "/app/backend/tests/test_auth_security.py",
+    "/app/backend/tests/test_phase2.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Filter expired coupons out of GET /api/coupons (expires_at > now) so it returns the 3 truly-active coupons and test_phase2 passes again.",
+    "Add failed-login attempt tracking + lockout (5 attempts) on POST /api/auth/login.",
+    "Set seller_verified on products created by POST /api/seller/products/bulk.",
+    "Make admin seeding idempotent - update password_hash when ADMIN_PASSWORD differs.",
+    "Fix 'Marked Mark Shipped' toast copy in SellerOrdersPage.",
+    "Change 'Paid via COD' wording for unpaid COD orders.",
+    "Use seller business_name (not raw id) in CategoryPage seller filter; replace native sort <select> with shadcn Select.",
+    "Optional: surface coupon rejection at order creation instead of silently zeroing the discount."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 962 lines and mixes auth, catalog, orders, payments, seller tools and seeding - split into routers (auth/catalog/orders/payments/seller) + seed module.",
+    "list_coupons() must apply the same validity rules used by _compute_discount(); duplicating validity logic in two places already caused the EXPIRED10 leak.",
+    "bulk_upload_products() inserts documents one-by-one in a loop; use insert_many for the valid batch, and reuse the same product-doc builder as the seed helper to avoid drift (missing seller_verified is exactly this drift).",
+    "PATCH /api/orders/{id}/status allows ANY seller/admin to move ANY order (no seller_ids ownership check) unlike /api/seller/orders/{id}/status - tighten or remove the legacy endpoint.",
+    "verify_payment stores razorpay_signature verbatim; fine for demo but avoid persisting signatures once real keys are live."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase3.py",
+    "/app/backend/tests/test_auth_security.py"
+  ],
+  "success_rate": {"backend": "96% (43/45 pytest)", "frontend": "100% of Phase-3 flows functional (minor copy/design issues only)"},
+  "seed_data_creation": "Created UI buyer qa_buyer_178857931224@example.com / Buyer@123 (with address + orders incl. one cancelled, one COD placed) and API buyers prefixed TEST_. Bulk-upload test products (TEST_*) were created and then removed from db.products (8 docs deleted) to keep the catalogue clean. Several seller1 orders were advanced to shipped/out_for_delivery/delivered by tests.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "Buyer: qa_buyer_178857931224@example.com / Buyer@123 ; Seller verified: seller1@terramart.com / Seller@123 ; Seller unverified: seller3@terramart.com / Seller@123 ; Admin: admin@terramart.com / Admin@123",
+  "context_for_next_testing_agent": "Run `pytest /app/backend/tests/ -p no:randomly -q`. Known expected failures until fixed: test_phase2::TestCoupons::test_list_coupons (4 coupons returned incl EXPIRED10) and test_auth_security::test_brute_force_lockout_after_5_failures (no lockout implemented). test_auth_security CORS test intentionally hits localhost:8001 because the public edge proxy rewrites CORS headers to '*'. Playwright: use [data-testid=\"login-email\"]/[data-testid=\"login-password\"]/[data-testid=\"login-submit\"] (generic input selectors flaked once). Demo payment auto-verifies with no modal; sticky-cart uses [data-testid=\"header-cart-count\"]-less badge, so assert on order-id instead. Verified product ids: verified seller product 1c59f9b7-2ee0-4ceb-ab59-23fb11013fd2, unverified seller product afb531cb-340b-4719-8e1e-92e3daa3f61d.",
+  "rca_of_the_issue": "EXPIRED10 leak: DEFAULT_COUPONS seeds EXPIRED10 with is_active=True (so the negative apply test works), but GET /api/coupons filters only on is_active and never compares expires_at, while _compute_discount() does the expiry check. Result: an expired coupon is advertised publicly and the phase-2 count assertion breaks. Brute-force gap: login() has no attempt counter/lockout store, so unlimited credential guessing is possible."
+}

@@ -22,6 +22,8 @@ import AccountProfilePage from "./pages/AccountProfilePage";
 import MyOrdersPage from "./pages/MyOrdersPage";
 import OrderDetailPage from "./pages/OrderDetailPage";
 import AddressesPage from "./pages/AddressesPage";
+import SellerBulkUploadPage from "./pages/SellerBulkUploadPage";
+import SellerOrdersPage from "./pages/SellerOrdersPage";
 import "./App.css";
 
 export default function App() {
@@ -42,6 +44,8 @@ export default function App() {
                 <Route path="/seller/login" element={<SellerLoginPage />} />
                 <Route path="/seller/signup" element={<SellerSignupPage />} />
                 <Route path="/seller/dashboard" element={<SellerDashboardPage />} />
+                <Route path="/seller/bulk-upload" element={<SellerBulkUploadPage />} />
+                <Route path="/seller/orders" element={<SellerOrdersPage />} />
                 <Route path="/cart" element={<CartPage />} />
                 <Route path="/checkout" element={<CheckoutPage />} />
                 <Route path="/order/success/:id" element={<OrderConfirmationPage />} />

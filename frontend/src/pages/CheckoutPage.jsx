@@ -46,14 +46,77 @@ export default function CheckoutPage() {
         payment_method: pay,
         coupon_code: savedCoupon?.code || null,
       };
-      const { data } = await api.post("/orders", payload);
-      setPlaced(true);
-      nav(`/order/success/${data.id}`, { replace: true });
-      clear();
-      sessionStorage.removeItem("terramart_coupon");
+      const { data: order } = await api.post("/orders", payload);
+
+      // COD - no gateway needed
+      if (pay === "cod") {
+        setPlaced(true);
+        nav(`/order/success/${order.id}`, { replace: true });
+        clear();
+        sessionStorage.removeItem("terramart_coupon");
+        return;
+      }
+
+      // Real / demo Razorpay flow
+      const { data: pay_intent } = await api.post(`/payments/create/${order.id}`);
+      const finishSuccess = async (rpo, rpp, rps) => {
+        await api.post("/payments/verify", {
+          order_id: order.id,
+          razorpay_order_id: rpo,
+          razorpay_payment_id: rpp,
+          razorpay_signature: rps,
+          demo_mode: !!pay_intent.demo_mode,
+        });
+        setPlaced(true);
+        nav(`/order/success/${order.id}`, { replace: true });
+        clear();
+        sessionStorage.removeItem("terramart_coupon");
+      };
+
+      if (pay_intent.demo_mode) {
+        // Demo mode – no real modal
+        toast.info("Demo payment (Razorpay keys not configured) — confirming automatically");
+        await finishSuccess(pay_intent.razorpay_order_id, `demo_pay_${Date.now()}`, "demo_signature");
+        return;
+      }
+
+      if (!window.Razorpay) {
+        toast.error("Payment SDK not loaded. Refresh & try again.");
+        setPlacing(false);
+        return;
+      }
+      const rzp = new window.Razorpay({
+        key: pay_intent.key_id,
+        amount: pay_intent.amount,
+        currency: pay_intent.currency,
+        order_id: pay_intent.razorpay_order_id,
+        name: "TerraMart",
+        description: `Order ${order.short_id}`,
+        prefill: { name: user.name, email: user.email, contact: user.phone || "" },
+        theme: { color: "#C4633A" },
+        method: pay === "upi" ? { upi: true } : pay === "netbanking" ? { netbanking: true } : pay === "card" ? { card: true } : undefined,
+        handler: async (res) => {
+          try {
+            await finishSuccess(res.razorpay_order_id, res.razorpay_payment_id, res.razorpay_signature);
+          } catch (e) {
+            toast.error(e.response?.data?.detail || "Payment verification failed. Please retry.");
+            setPlacing(false);
+          }
+        },
+        modal: {
+          ondismiss: () => {
+            toast.warning("Payment cancelled — your cart is intact. Retry when ready.");
+            setPlacing(false);
+          },
+        },
+      });
+      rzp.on("payment.failed", (resp) => {
+        toast.error(`Payment failed: ${resp?.error?.description || "Please retry"}`);
+        setPlacing(false);
+      });
+      rzp.open();
     } catch (e) {
       toast.error(e.response?.data?.detail || "Failed to place order");
-    } finally {
       setPlacing(false);
     }
   };
@@ -230,18 +293,22 @@ function AddressForm({ onClose, onSaved, existing }) {
 }
 
 function StepPayment({ pay, setPay, onBack, onContinue }) {
+  const [rzpEnabled, setRzpEnabled] = useState(null);
+  useEffect(() => { api.get("/payments/config").then((r) => setRzpEnabled(r.data.enabled)); }, []);
   const options = [
-    { id: "upi", label: "UPI", desc: "PhonePe, GPay, Paytm & more", icon: Wallet },
-    { id: "card", label: "Credit / Debit Card", desc: "Visa, Mastercard, RuPay", icon: CreditCard },
-    { id: "netbanking", label: "Net Banking", desc: "All major banks supported", icon: Landmark },
-    { id: "cod", label: "Cash on Delivery", desc: "Pay when you receive", icon: Truck },
+    { id: "upi", label: "UPI", desc: "PhonePe, GPay, Paytm & more", icon: Wallet, gateway: true },
+    { id: "card", label: "Credit / Debit Card", desc: "Visa, Mastercard, RuPay", icon: CreditCard, gateway: true },
+    { id: "netbanking", label: "Net Banking", desc: "All major banks supported", icon: Landmark, gateway: true },
+    { id: "cod", label: "Cash on Delivery", desc: "Pay when you receive", icon: Truck, gateway: false },
   ];
   return (
     <div className="bg-white border border-border p-5 md:p-6" data-testid="step-payment">
       <h2 className="font-heading font-semibold text-xl text-charcoal mb-4">Payment method</h2>
-      <div className="text-xs bg-ochre/10 border border-ochre/40 text-charcoal-muted p-3 mb-4">
-        Payment gateway integration is scheduled for the next phase. Selecting an option below will place the order in demo mode.
-      </div>
+      {rzpEnabled === false && (
+        <div className="text-xs bg-ochre/10 border border-ochre/40 text-charcoal-muted p-3 mb-4" data-testid="razorpay-demo-notice">
+          Razorpay test keys are not configured yet — non-COD selections will complete in demo mode. Add <span className="font-mono">RAZORPAY_KEY_ID</span> &amp; <span className="font-mono">RAZORPAY_KEY_SECRET</span> in <span className="font-mono">/app/backend/.env</span> to enable the real gateway.
+        </div>
+      )}
       <div className="space-y-3">
         {options.map((o) => (
           <label key={o.id} className={`flex items-center gap-3 border-2 p-4 cursor-pointer transition-colors ${pay === o.id ? "border-terracotta bg-terracotta/5" : "border-border bg-off-white hover:border-charcoal"}`} data-testid={`pay-${o.id}`}>
@@ -251,6 +318,7 @@ function StepPayment({ pay, setPay, onBack, onContinue }) {
               <div className="font-medium text-charcoal">{o.label}</div>
               <div className="text-xs text-charcoal-muted">{o.desc}</div>
             </div>
+            {o.gateway && rzpEnabled && <span className="text-[10px] uppercase tracking-widest text-sage font-bold">Razorpay</span>}
           </label>
         ))}
       </div>

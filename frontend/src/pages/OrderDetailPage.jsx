@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, inr } from "../lib/api";
-import { CheckCircle2, Package, Truck, Home, ArrowLeft, MapPin, ShieldCheck } from "lucide-react";
+import { CheckCircle2, Package, Truck, Home, ArrowLeft, MapPin, ShieldCheck, XCircle } from "lucide-react";
+import { toast } from "sonner";
 
 const FLOW = [
   { key: "placed", label: "Order Placed", icon: CheckCircle2 },
+  { key: "confirmed", label: "Confirmed", icon: CheckCircle2 },
   { key: "shipped", label: "Shipped", icon: Package },
   { key: "out_for_delivery", label: "Out for Delivery", icon: Truck },
   { key: "delivered", label: "Delivered", icon: Home },
@@ -13,13 +15,30 @@ const FLOW = [
 export default function OrderDetailPage() {
   const { id } = useParams();
   const [o, setO] = useState(null);
+  const [cancelling, setCancelling] = useState(false);
 
-  useEffect(() => { api.get(`/orders/${id}`).then((r) => setO(r.data)); }, [id]);
+  const load = () => api.get(`/orders/${id}`).then((r) => setO(r.data));
+  useEffect(() => { load(); }, [id]);
 
   if (!o) return <div className="bg-white border border-border p-8 text-charcoal-muted">Loading…</div>;
 
   const isCancelled = o.status === "cancelled";
   const activeIdx = FLOW.findIndex((f) => f.key === o.status);
+  const canCancel = ["placed", "confirmed"].includes(o.status);
+
+  const cancel = async () => {
+    if (!confirm("Cancel this order?")) return;
+    setCancelling(true);
+    try {
+      await api.post(`/orders/${id}/cancel`);
+      toast.success("Order cancelled");
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Failed to cancel");
+    } finally {
+      setCancelling(false);
+    }
+  };
 
   return (
     <div className="space-y-6" data-testid="order-detail">
@@ -34,16 +53,23 @@ export default function OrderDetailPage() {
             <div className="font-heading font-bold text-2xl text-charcoal">{o.short_id}</div>
             <div className="text-xs text-charcoal-muted mt-1">Placed on {new Date(o.created_at).toLocaleString("en-IN")}</div>
           </div>
-          <div className="text-right">
-            <div className="text-xs uppercase tracking-[0.2em] text-charcoal-muted">Estimated delivery</div>
-            <div className="font-heading font-semibold text-lg text-charcoal">{new Date(o.estimated_delivery).toLocaleDateString("en-IN", { day: "numeric", month: "long" })}</div>
+          <div className="flex flex-col items-end gap-2">
+            <div className="text-right">
+              <div className="text-xs uppercase tracking-[0.2em] text-charcoal-muted">Estimated delivery</div>
+              <div className="font-heading font-semibold text-lg text-charcoal">{new Date(o.estimated_delivery).toLocaleDateString("en-IN", { day: "numeric", month: "long" })}</div>
+            </div>
+            {canCancel && (
+              <button onClick={cancel} disabled={cancelling} data-testid="cancel-order-btn" className="inline-flex items-center gap-1 text-xs text-destructive border border-destructive/30 hover:bg-destructive/10 px-3 py-1.5 transition-colors">
+                <XCircle className="w-3.5 h-3.5" /> {cancelling ? "Cancelling…" : "Cancel order"}
+              </button>
+            )}
           </div>
         </div>
 
         {/* Tracking */}
         {!isCancelled ? (
           <div className="mt-8" data-testid="order-tracker">
-            <div className="grid grid-cols-4 gap-1 md:gap-2 relative">
+            <div className="grid grid-cols-5 gap-1 md:gap-2 relative">
               {FLOW.map((f, i) => {
                 const Icon = f.icon;
                 const done = i <= activeIdx;
@@ -107,7 +133,11 @@ export default function OrderDetailPage() {
             <div className="border-t border-border pt-2 mt-2 flex justify-between font-heading font-bold text-lg">
               <span>Total</span><span>{inr(o.total)}</span>
             </div>
-            <div className="text-xs text-charcoal-muted mt-1">Paid via <span className="font-medium text-charcoal uppercase">{o.payment_method}</span></div>
+            <div className="text-xs text-charcoal-muted mt-1">
+              {o.payment_method === "cod"
+                ? (o.payment_status === "paid" ? "Cash on Delivery — paid" : "Cash on Delivery (pay on delivery)")
+                : <>Paid via <span className="font-medium text-charcoal uppercase">{o.payment_method}</span></>}
+            </div>
           </div>
         </div>
       </div>

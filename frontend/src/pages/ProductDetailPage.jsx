@@ -3,8 +3,9 @@ import { useParams } from "react-router-dom";
 import { api, inr } from "../lib/api";
 import { useCart } from "../context/CartContext";
 import { useAuth } from "../context/AuthContext";
-import { Star, ShieldCheck, Truck, RotateCcw, ShoppingCart, Zap } from "lucide-react";
+import { Star, ShieldCheck, ShieldAlert, Truck, RotateCcw, ShoppingCart, Zap } from "lucide-react";
 import { toast } from "sonner";
+import { SimilarProducts, BoughtTogether } from "../components/SimilarAndBundles";
 
 export default function ProductDetailPage() {
   const { id } = useParams();
@@ -82,10 +83,20 @@ export default function ProductDetailPage() {
           </div>
 
           {p.seller && (
-            <div className="inline-flex items-center gap-2 text-xs bg-off-white-alt border border-border px-3 py-1.5 mb-4">
-              <ShieldCheck className={`w-4 h-4 ${p.seller.verified ? "text-sage" : "text-charcoal-muted"}`} />
-              <span className="font-medium text-charcoal">Sold by {p.seller.business_name}</span>
-              {p.seller.verified && <span className="text-[10px] uppercase tracking-widest text-sage font-bold">Verified</span>}
+            <div className="inline-flex items-center gap-2 text-xs bg-off-white-alt border border-border px-3 py-1.5 mb-4" data-testid="seller-badge">
+              {p.seller.verified ? (
+                <>
+                  <ShieldCheck className="w-4 h-4 text-sage" />
+                  <span className="font-medium text-charcoal">Sold by {p.seller.business_name}</span>
+                  <span className="text-[10px] uppercase tracking-widest text-sage font-bold" data-testid="verified-badge">Verified</span>
+                </>
+              ) : (
+                <>
+                  <ShieldAlert className="w-4 h-4 text-charcoal-muted" />
+                  <span className="font-medium text-charcoal">Sold by {p.seller.business_name}</span>
+                  <span className="text-[10px] uppercase tracking-widest text-charcoal-muted font-bold" data-testid="pending-badge">Pending Verification</span>
+                </>
+              )}
             </div>
           )}
 
@@ -141,6 +152,10 @@ export default function ProductDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Similar + Frequently Bought Together */}
+      <BoughtTogether productId={p.id} />
+      <SimilarProducts productId={p.id} />
 
       {/* Reviews */}
       <section className="mt-14 border-t border-border pt-10" data-testid="reviews-section">

@@ -50,7 +50,7 @@ export default function OrderConfirmationPage() {
             ))}
           </div>
           <div className="border-t border-border mt-4 pt-3 flex justify-between text-sm">
-            <span className="text-charcoal-muted">Total paid</span>
+            <span className="text-charcoal-muted">{o.payment_method === "cod" ? "Total (Cash on Delivery)" : "Total paid"}</span>
             <span className="font-heading font-bold text-lg text-charcoal">{inr(o.total)}</span>
           </div>
         </div>
