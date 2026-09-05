@@ -18,13 +18,20 @@ export default function CategoryPage() {
   const { slug } = useParams();
   const [sp] = useSearchParams();
   const q = sp.get("q") || "";
+  const urlMinPrice = sp.get("min_price") || "";
+  const urlMaxPrice = sp.get("max_price") || "";
+  const urlMaterial = sp.get("material") || "";
 
   const [items, setItems] = useState([]);
   const [sellers, setSellers] = useState([]);
   const [sort, setSort] = useState("");
-  const [filters, setFilters] = useState({ min_price: "", max_price: "", seller_id: "", min_rating: "", material: "" });
+  const [filters, setFilters] = useState({ min_price: urlMinPrice, max_price: urlMaxPrice, seller_id: "", min_rating: "", material: urlMaterial });
   const [showFilters, setShowFilters] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setFilters((f) => ({ ...f, min_price: urlMinPrice, max_price: urlMaxPrice, material: urlMaterial }));
+  }, [urlMinPrice, urlMaxPrice, urlMaterial]);
 
   const params = useMemo(() => {
     const p = { sort, limit: 60 };

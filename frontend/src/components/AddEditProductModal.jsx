@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { api, inr, API } from "../lib/api";
-import { X, Plus, Trash2, UploadCloud, Loader2 } from "lucide-react";
+import { X, Plus, Trash2, UploadCloud, Loader2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
 const CATEGORIES = [
@@ -19,9 +19,31 @@ export default function AddEditProductModal({ existing, onClose, onSaved }) {
   const [f, setF] = useState(EMPTY);
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
   const fileRef = useRef(null);
 
   const resolveImg = (u) => (u?.startsWith("/api/uploads/") ? `${process.env.REACT_APP_BACKEND_URL}${u}` : u);
+
+  const aiFill = async () => {
+    if (!f.title.trim()) { toast.error("Add a product title first — even a rough one"); return; }
+    setAiBusy(true);
+    try {
+      const { data } = await api.post("/ai/generate-description", {
+        title: f.title,
+        category: f.category,
+        keywords: (f.description || "").slice(0, 200),
+        material: f.material || null,
+      });
+      setF((prev) => ({
+        ...prev,
+        title: data.title || prev.title,
+        description: [data.description, (data.bullets || []).map((b) => `• ${b}`).join("\n")].filter(Boolean).join("\n\n"),
+      }));
+      toast.success("AI listing generated — review and edit before saving");
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "AI unavailable, try again");
+    } finally { setAiBusy(false); }
+  };
 
   const doUpload = async (files) => {
     if (!files || files.length === 0) return;
@@ -135,6 +157,19 @@ export default function AddEditProductModal({ existing, onClose, onSaved }) {
           </div>
 
           <textarea placeholder="Description" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} data-testid="product-description" rows={3} className="w-full border-2 border-border focus:border-terracotta bg-off-white px-3 py-3 outline-none" />
+
+          <div className="flex justify-end -mt-2">
+            <button
+              type="button"
+              onClick={aiFill}
+              disabled={aiBusy}
+              data-testid="ai-generate-description-btn"
+              className="text-xs inline-flex items-center gap-1.5 px-3 py-1.5 border border-terracotta text-terracotta hover:bg-terracotta hover:text-off-white transition-colors disabled:opacity-60"
+            >
+              {aiBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+              {aiBusy ? "Generating…" : "AI generate title + description"}
+            </button>
+          </div>
 
           <div>
             <div className="text-xs uppercase tracking-[0.2em] text-charcoal-muted font-semibold mb-2">Photos *</div>

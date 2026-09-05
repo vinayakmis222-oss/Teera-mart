@@ -1685,6 +1685,10 @@ async def shutdown():
 async def root():
     return {"service": "TerraMart", "status": "ok"}
 
+# ------------------ AI ROUTES ------------------
+from ai_routes import build_ai_router  # noqa: E402
+api.include_router(build_ai_router(db, get_current_user, require_seller))
+
 app.include_router(api)
 
 app.add_middleware(

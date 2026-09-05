@@ -34,6 +34,8 @@ import AdminOrdersPage from "./pages/AdminOrdersPage";
 import AdminDuesPage from "./pages/AdminDuesPage";
 import SellerSubscriptionPage from "./pages/SellerSubscriptionPage";
 import SellerDuesPage from "./pages/SellerDuesPage";
+import RoomDesignerPage from "./pages/RoomDesignerPage";
+import AIChatWidget from "./components/AIChatWidget";
 import "./App.css";
 
 export default function App() {
@@ -48,6 +50,7 @@ export default function App() {
             <main className="flex-1">
               <Routes>
                 <Route path="/" element={<HomePage />} />
+                <Route path="/ai-designer" element={<RoomDesignerPage />} />
                 <Route path="/category/:slug" element={<CategoryPage />} />
                 <Route path="/product/:id" element={<ProductDetailPage />} />
                 <Route path="/login" element={<LoginPage />} />
@@ -80,6 +83,7 @@ export default function App() {
             </main>
             <Footer />
             <StickyCart />
+            <AIChatWidget />
           </div>
           <Toaster position="top-right" richColors />
         </BrowserRouter>

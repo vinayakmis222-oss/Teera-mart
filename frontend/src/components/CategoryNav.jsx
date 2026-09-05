@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { Grid2x2, Shapes, Sticker, Wallpaper, PaintBucket, Lamp, Layers } from "lucide-react";
+import { Grid2x2, Shapes, Sticker, Wallpaper, PaintBucket, Lamp, Layers, Sparkles } from "lucide-react";
 import { api } from "../lib/api";
 
 const ICONS = { "grid-2x2": Grid2x2, shapes: Shapes, sticker: Sticker, wallpaper: Wallpaper, "paint-bucket": PaintBucket, lamp: Lamp, layers: Layers };
@@ -28,6 +28,16 @@ export default function CategoryNav() {
               </li>
             );
           })}
+          <li className="ml-auto">
+            <Link
+              data-testid="cat-nav-ai-designer"
+              to="/ai-designer"
+              className="flex items-center gap-2 px-4 py-2 whitespace-nowrap text-sm font-semibold text-terracotta hover:bg-terracotta hover:text-off-white transition-colors border border-terracotta"
+            >
+              <Sparkles className="w-4 h-4" />
+              Design my room
+            </Link>
+          </li>
         </ul>
       </div>
     </nav>

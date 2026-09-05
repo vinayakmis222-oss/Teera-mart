@@ -1,20 +1,41 @@
 import { Link, useNavigate } from "react-router-dom";
-import { Search, ShoppingCart, User, Store, LogOut, Package, ShieldCheck } from "lucide-react";
+import { Search, ShoppingCart, User, Store, LogOut, Package, ShieldCheck, Sparkles, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useCart } from "../context/CartContext";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { toast } from "sonner";
+import { api } from "../lib/api";
 
 export default function Header() {
   const { user, logout } = useAuth();
   const { count } = useCart();
   const nav = useNavigate();
   const [q, setQ] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
 
   const submit = (e) => {
     e.preventDefault();
     if (q.trim()) nav(`/category/all?q=${encodeURIComponent(q.trim())}`);
+  };
+
+  const aiSearch = async () => {
+    const query = q.trim();
+    if (!query || aiBusy) return;
+    setAiBusy(true);
+    try {
+      const { data } = await api.post("/ai/search", { query });
+      const params = new URLSearchParams();
+      if (data.q) params.set("q", data.q);
+      if (data.min_price != null) params.set("min_price", String(data.min_price));
+      if (data.max_price != null) params.set("max_price", String(data.max_price));
+      if (data.material) params.set("material", data.material);
+      const slug = data.category && data.category !== "all" ? data.category : "all";
+      nav(`/category/${slug}${params.toString() ? `?${params.toString()}` : ""}`);
+    } catch {
+      toast.error("AI search unavailable — running plain search instead");
+      nav(`/category/all?q=${encodeURIComponent(query)}`);
+    } finally { setAiBusy(false); }
   };
 
   return (
@@ -34,8 +55,19 @@ export default function Header() {
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search tiles, paints, wallpapers, decor…"
-            className="w-full bg-white border-2 border-border focus:border-terracotta text-charcoal placeholder:text-charcoal-light px-4 py-2.5 pr-12 outline-none transition-colors"
+            className="w-full bg-white border-2 border-border focus:border-terracotta text-charcoal placeholder:text-charcoal-light px-4 py-2.5 pr-24 outline-none transition-colors"
           />
+          <button
+            type="button"
+            onClick={aiSearch}
+            disabled={aiBusy || !q.trim()}
+            data-testid="header-ai-search-btn"
+            title="Ask AI to interpret your search"
+            className="absolute right-12 top-1/2 -translate-y-1/2 h-8 w-9 grid place-items-center text-terracotta hover:bg-terracotta/10 disabled:opacity-40 transition-colors"
+            aria-label="AI search"
+          >
+            {aiBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+          </button>
           <button
             type="submit"
             data-testid="header-search-btn"

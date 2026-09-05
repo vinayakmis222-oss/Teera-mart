@@ -34,8 +34,16 @@ Full-stack multi-vendor e-commerce marketplace for construction materials & home
 - **Buyer order cancellation**: On order detail page while status is `placed`/`confirmed`, buyer sees a Cancel Order button that moves the order to `cancelled`.
 - **Security hardening**: Login lockout — 5 failed attempts trigger 15-min account lockout (returns 423). Auth attempts tracked in `db.login_attempts` and cleared on successful login.
 
+## Implemented (Phase 4 — 2026-02): AI Assistant Suite (ChatGPT integration)
+- **TerraBot buyer chatbot** (floating widget, streaming SSE): `POST /api/ai/chat` — GPT-5.4 via Emergent Universal Key + `emergentintegrations`. Multi-turn history persisted in `db.ai_sessions` (session_id in localStorage). Widget auto-hides on /admin, /seller/*, /login, /signup, /checkout.
+- **AI Room Designer**: `POST /api/ai/design-room` at `/ai-designer`. Returns `{summary, palette, picks[]}` with each pick joined against real MongoDB products by category + keyword. Nav-bar CTA "Design my room".
+- **Seller AI Description Generator**: `POST /api/ai/generate-description` (seller-auth). "AI generate title + description" button inside AddEditProductModal — fills title + long-form description + bullets in one click.
+- **AI Search**: `POST /api/ai/search` — sparkle button in header search bar converts natural language ("matte tiles under ₹800 for bathroom") into filter params (category / q / min_price / max_price / material) and navigates.
+- New collection: `ai_sessions {session_id, user_id, messages[], created_at, updated_at}`.
+- Model: `openai/gpt-5.4`. Key: `EMERGENT_LLM_KEY`.
+
 ## Backlog / Next
-### P0
+### P0 — Code Quality Report (pending from previous session)
 - Product management (seller CRUD) with image uploads (object storage)
 - Checkout & payments (Stripe/Razorpay)
 - Order tracking (buyer + seller views)
