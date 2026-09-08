@@ -198,7 +198,7 @@ class OrderItemIn(BaseModel):
 class OrderCreateIn(BaseModel):
     items: List[OrderItemIn]
     address_id: str
-    payment_method: Literal["upi", "card", "netbanking", "cod"]
+    payment_method: Literal["upi", "card", "netbanking", "cod", "online"]
     coupon_code: Optional[str] = None
 
 # ------------------ AUTH ROUTES ------------------
@@ -245,6 +245,10 @@ DEFAULT_SETTINGS = {
     "default_commission_rate": 10.0,    # percent
     "dues_threshold": 5000.0,           # ₹
     "dues_grace_days": 15,
+    "payment_methods": {
+        "cod": True,                     # Cash on Delivery
+        "online": True,                  # Payment Link / Online Payment
+    },
 }
 
 async def get_settings() -> dict:
@@ -255,6 +259,11 @@ async def get_settings() -> dict:
         doc.pop("_id", None)
     for k, v in DEFAULT_SETTINGS.items():
         doc.setdefault(k, v)
+    # ensure nested payment_methods dict has all default keys
+    pm = doc.get("payment_methods") or {}
+    for k, v in DEFAULT_SETTINGS["payment_methods"].items():
+        pm.setdefault(k, v)
+    doc["payment_methods"] = pm
     return doc
 
 async def _seller_pending_dues(seller_id: str) -> tuple[float, Optional[str]]:
@@ -800,6 +809,16 @@ SERVICEABLE_AREAS = "Mubarakpur, Bhitauli & Allu"
 
 @api.post("/orders")
 async def create_order(body: OrderCreateIn, user: dict = Depends(get_current_user)):
+    # payment method availability check
+    settings = await get_settings()
+    pm_conf = settings.get("payment_methods") or {}
+    is_cod = body.payment_method == "cod"
+    is_online = body.payment_method in ("online", "upi", "card", "netbanking")
+    if is_cod and not pm_conf.get("cod", True):
+        raise HTTPException(400, "Cash on Delivery is currently unavailable. Please choose another payment method.")
+    if is_online and not pm_conf.get("online", True):
+        raise HTTPException(400, "Online payment is currently unavailable. Please choose another payment method.")
+
     address = await db.addresses.find_one({"id": body.address_id, "user_id": user["id"]}, {"_id": 0})
     if not address:
         raise HTTPException(400, "Delivery address not found")
@@ -964,6 +983,36 @@ async def bought_together(product_id: str):
 @api.get("/payments/config")
 async def payment_config():
     return {"key_id": RAZORPAY_KEY_ID if RAZORPAY_ENABLED else "", "enabled": RAZORPAY_ENABLED}
+
+# ------------------ PAYMENT METHOD TOGGLES ------------------
+@api.get("/payment-methods/config")
+async def payment_methods_config():
+    """Public — returns which payment methods are enabled for buyers."""
+    settings = await get_settings()
+    pm = settings.get("payment_methods") or {}
+    return {
+        "cod": bool(pm.get("cod", True)),
+        "online": bool(pm.get("online", True)),
+    }
+
+class PaymentMethodsUpdateIn(BaseModel):
+    cod: Optional[bool] = None
+    online: Optional[bool] = None
+
+@api.patch("/admin/payment-methods")
+async def admin_update_payment_methods(body: PaymentMethodsUpdateIn, user: dict = Depends(require_admin)):
+    settings = await get_settings()
+    pm = dict(settings.get("payment_methods") or {})
+    if body.cod is not None:
+        pm["cod"] = bool(body.cod)
+    if body.online is not None:
+        pm["online"] = bool(body.online)
+    await db.settings.update_one(
+        {"key": "platform"},
+        {"$set": {"payment_methods": pm}},
+        upsert=True,
+    )
+    return {"cod": bool(pm.get("cod", True)), "online": bool(pm.get("online", True))}
 
 @api.post("/payments/create/{order_id}")
 async def create_payment(order_id: str, user: dict = Depends(get_current_user)):
